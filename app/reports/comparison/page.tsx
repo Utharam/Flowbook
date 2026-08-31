@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useCompany } from '@/components/context/company-context';
 import { 
   BarChart3, 
@@ -14,7 +15,10 @@ import {
   TrendingUp, 
   Layers, 
   Columns,
-  Coins
+  ChevronDown,
+  ChevronRight,
+  Folder,
+  BookOpen
 } from 'lucide-react';
 
 export default function MultiCompanyComparisonPage() {
@@ -25,6 +29,16 @@ export default function MultiCompanyComparisonPage() {
   const [endDate, setEndDate] = useState('');
   const [comparativeData, setComparativeData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Expandable Heads State
+  const [expandedHeads, setExpandedHeads] = useState<Record<string, boolean>>({
+    ASSETS: true,
+    LIABILITIES: true,
+    EQUITY: true,
+    REVENUE: true,
+    EXPENSES: true,
+    TB_ALL: true
+  });
 
   // Initialize selected companies (up to 3 by default)
   useEffect(() => {
@@ -70,9 +84,40 @@ export default function MultiCompanyComparisonPage() {
     }
   };
 
+  const toggleHead = (headKey: string) => {
+    setExpandedHeads(prev => ({ ...prev, [headKey]: !prev[headKey] }));
+  };
+
+  const toggleAllHeads = (expand: boolean) => {
+    setExpandedHeads({
+      ASSETS: expand,
+      LIABILITIES: expand,
+      EQUITY: expand,
+      REVENUE: expand,
+      EXPENSES: expand,
+      TB_ALL: expand
+    });
+  };
+
+  // Helper to collect union of accounts across all compared companies for a category
+  const getUnifiedAccountsForCategory = (categoryKey: 'assets' | 'liabilities' | 'equity' | 'revenue' | 'expenses') => {
+    const accountMap = new Map<string, { code: string; name: string; is_group: number }>();
+
+    for (const compData of comparativeData) {
+      const accountsList = compData.category_accounts?.[categoryKey] || [];
+      for (const acc of accountsList) {
+        if (!accountMap.has(acc.code)) {
+          accountMap.set(acc.code, { code: acc.code, name: acc.name, is_group: acc.is_group });
+        }
+      }
+    }
+
+    return Array.from(accountMap.values()).sort((a, b) => a.code.localeCompare(b.code));
+  };
+
   const exportCSV = () => {
     if (comparativeData.length === 0) return;
-    const headerRow = ['Metric / Head', ...comparativeData.map(d => `${d.company.legal_name} (${d.company.base_currency})`)];
+    const headerRow = ['Metric / Account Code & Name', ...comparativeData.map(d => `${d.company.legal_name} (${d.company.base_currency})`)];
     
     const rows = [
       [`Flowbook by Utharam - Multi-Company Comparative Statement`],
@@ -82,19 +127,58 @@ export default function MultiCompanyComparisonPage() {
     ];
 
     if (activeTab === 'BS') {
-      rows.push(['Total Assets', ...comparativeData.map(d => d.balance_sheet.totalAssets.toFixed(2))]);
-      rows.push(['Total Liabilities', ...comparativeData.map(d => d.balance_sheet.totalLiabilities.toFixed(2))]);
-      rows.push(['Base Equity', ...comparativeData.map(d => d.balance_sheet.totalEquityBase.toFixed(2))]);
-      rows.push(['Current Period Retained Earnings', ...comparativeData.map(d => d.balance_sheet.currentPeriodEarnings.toFixed(2))]);
-      rows.push(['Total Liabilities & Equity', ...comparativeData.map(d => d.balance_sheet.totalLiabilitiesAndEquity.toFixed(2))]);
+      rows.push(['TOTAL ASSETS', ...comparativeData.map(d => d.balance_sheet.totalAssets.toFixed(2))]);
+      const assetsList = getUnifiedAccountsForCategory('assets');
+      for (const a of assetsList) {
+        rows.push([
+          `  ${a.code} - ${a.name}`,
+          ...comparativeData.map(d => {
+            const found = (d.category_accounts?.assets || []).find((acc: any) => acc.code === a.code);
+            return found ? found.displayBalance.toFixed(2) : '0.00';
+          })
+        ]);
+      }
+
+      rows.push(['TOTAL LIABILITIES', ...comparativeData.map(d => d.balance_sheet.totalLiabilities.toFixed(2))]);
+      const liabList = getUnifiedAccountsForCategory('liabilities');
+      for (const l of liabList) {
+        rows.push([
+          `  ${l.code} - ${l.name}`,
+          ...comparativeData.map(d => {
+            const found = (d.category_accounts?.liabilities || []).find((acc: any) => acc.code === l.code);
+            return found ? found.displayBalance.toFixed(2) : '0.00';
+          })
+        ]);
+      }
+
+      rows.push(['TOTAL EQUITY & RESERVES', ...comparativeData.map(d => d.balance_sheet.totalEquityWithEarnings.toFixed(2))]);
+      rows.push(['TOTAL LIABILITIES & EQUITY', ...comparativeData.map(d => d.balance_sheet.totalLiabilitiesAndEquity.toFixed(2))]);
     } else if (activeTab === 'PL') {
-      rows.push(['Operating Revenue', ...comparativeData.map(d => d.income_statement.totalRevenue.toFixed(2))]);
-      rows.push(['Operating Expenses', ...comparativeData.map(d => d.income_statement.totalExpenses.toFixed(2))]);
-      rows.push(['Net Operating Profit', ...comparativeData.map(d => d.income_statement.netProfit.toFixed(2))]);
-      rows.push(['Net Margin (%)', ...comparativeData.map(d => `${d.income_statement.marginPercentage.toFixed(1)}%`)]);
-    } else {
-      rows.push(['Total Debits', ...comparativeData.map(d => d.trial_balance.totalDebits.toFixed(2))]);
-      rows.push(['Total Credits', ...comparativeData.map(d => d.trial_balance.totalCredits.toFixed(2))]);
+      rows.push(['TOTAL OPERATING REVENUE', ...comparativeData.map(d => d.income_statement.totalRevenue.toFixed(2))]);
+      const revList = getUnifiedAccountsForCategory('revenue');
+      for (const r of revList) {
+        rows.push([
+          `  ${r.code} - ${r.name}`,
+          ...comparativeData.map(d => {
+            const found = (d.category_accounts?.revenue || []).find((acc: any) => acc.code === r.code);
+            return found ? found.displayBalance.toFixed(2) : '0.00';
+          })
+        ]);
+      }
+
+      rows.push(['TOTAL OPERATING EXPENSES', ...comparativeData.map(d => d.income_statement.totalExpenses.toFixed(2))]);
+      const expList = getUnifiedAccountsForCategory('expenses');
+      for (const e of expList) {
+        rows.push([
+          `  ${e.code} - ${e.name}`,
+          ...comparativeData.map(d => {
+            const found = (d.category_accounts?.expenses || []).find((acc: any) => acc.code === e.code);
+            return found ? found.displayBalance.toFixed(2) : '0.00';
+          })
+        ]);
+      }
+
+      rows.push(['NET OPERATING PROFIT', ...comparativeData.map(d => d.income_statement.netProfit.toFixed(2))]);
     }
 
     const csvContent = 'data:text/csv;charset=utf-8,' + rows.map(e => e.join(',')).join('\n');
@@ -120,7 +204,7 @@ export default function MultiCompanyComparisonPage() {
             Multi-Company Comparative Financials
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Simultaneously load and compare the Balance Sheet, Profit & Loss, and Trial Balance across 2 to 5 corporate entities.
+            Compare Balance Sheets, Profit & Loss, and Trial Balances side-by-side with expandable account heads.
           </p>
         </div>
 
@@ -174,7 +258,7 @@ export default function MultiCompanyComparisonPage() {
           </div>
         </div>
 
-        {/* View Mode Tabs & Date Filter */}
+        {/* View Mode Tabs, Expand/Collapse & Date Filter */}
         <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-slate-800 text-xs">
           <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
             <button
@@ -227,7 +311,27 @@ export default function MultiCompanyComparisonPage() {
             </button>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4">
+            {/* Expand / Collapse Master Buttons */}
+            {activeTab !== 'RATIOS' && (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => toggleAllHeads(true)}
+                  className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-750 text-[11px] font-semibold"
+                >
+                  Expand All Heads
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleAllHeads(false)}
+                  className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800 text-[11px]"
+                >
+                  Collapse All
+                </button>
+              </div>
+            )}
+
             <div className="flex items-center gap-2 text-slate-300">
               <Calendar className="w-4 h-4 text-emerald-400" />
               <span>Period As Of:</span>
@@ -245,8 +349,9 @@ export default function MultiCompanyComparisonPage() {
       {/* Comparative Matrix Table Container */}
       <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
         <div className="p-4 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
-          <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
-            Side-by-Side Comparison: {activeTab === 'BS' ? 'Balance Sheet' : activeTab === 'PL' ? 'Profit & Loss' : activeTab === 'TB' ? 'Trial Balance' : 'Key Performance Indicators'}
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+            <span>Side-by-Side Comparison: {activeTab === 'BS' ? 'Balance Sheet' : activeTab === 'PL' ? 'Profit & Loss' : activeTab === 'TB' ? 'Trial Balance' : 'Key Performance Indicators'}</span>
+            <span className="text-[10px] text-emerald-400 font-normal lowercase">(click arrows to expand/collapse inner ledgers)</span>
           </div>
           <div className="text-xs text-slate-400">
             {comparativeData.length} Entities Loaded
@@ -257,7 +362,7 @@ export default function MultiCompanyComparisonPage() {
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-950 text-slate-300 border-b border-slate-800 text-[11px] uppercase tracking-wider font-semibold">
               <tr>
-                <th className="py-3 px-4 w-72">Financial Metric / Section</th>
+                <th className="py-3 px-4 w-80">Financial Head & Account Taxonomy</th>
                 {comparativeData.map((d) => (
                   <th key={d.company.id} className="py-3 px-4 text-right">
                     <div className="font-bold text-white text-xs">{d.company.legal_name}</div>
@@ -269,49 +374,162 @@ export default function MultiCompanyComparisonPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
-              {/* TAB 1: BALANCE SHEET COMPARATIVE */}
+              {/* TAB 1: BALANCE SHEET COMPARATIVE WITH EXPANDABLE HEADS */}
               {activeTab === 'BS' && (
                 <>
-                  <tr className="bg-emerald-950/20 font-bold text-emerald-300">
-                    <td className="py-3 px-4">TOTAL ASSETS</td>
+                  {/* 1. ASSETS HEAD */}
+                  <tr
+                    onClick={() => toggleHead('ASSETS')}
+                    className="bg-emerald-950/30 font-bold text-emerald-300 cursor-pointer hover:bg-emerald-950/50 transition-colors select-none"
+                  >
+                    <td className="py-3 px-4 flex items-center gap-2">
+                      {expandedHeads.ASSETS ? <ChevronDown className="w-4 h-4 text-emerald-400" /> : <ChevronRight className="w-4 h-4 text-emerald-400" />}
+                      <span className="text-sm tracking-tight uppercase">1. TOTAL ASSETS</span>
+                    </td>
                     {comparativeData.map((d) => (
                       <td key={d.company.id} className="py-3 px-4 text-right font-mono text-emerald-400 text-sm">
                         {d.balance_sheet.totalAssets.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })} {d.company.base_currency}
                       </td>
                     ))}
                   </tr>
-                  <tr className="bg-sky-950/20 font-bold text-sky-300">
-                    <td className="py-3 px-4">TOTAL LIABILITIES</td>
+
+                  {/* Expanded Asset Accounts */}
+                  {expandedHeads.ASSETS && getUnifiedAccountsForCategory('assets').map((acc) => (
+                    <tr key={acc.code} className="hover:bg-slate-850/40 text-xs">
+                      <td className="py-2 px-4 pl-10 text-slate-300 font-mono">
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400">{acc.code}</span>
+                          <span className="text-slate-200">{acc.name}</span>
+                        </div>
+                      </td>
+                      {comparativeData.map((d) => {
+                        const found = (d.category_accounts?.assets || []).find((a: any) => a.code === acc.code);
+                        return (
+                          <td key={d.company.id} className="py-2 px-4 text-right font-mono">
+                            {found && found.displayBalance > 0 ? (
+                              <Link
+                                href={`/ledger?accountId=${found.id}`}
+                                className="text-slate-100 hover:text-emerald-400 hover:underline font-bold"
+                                title={`Click to view ${acc.name} ledger for ${d.company.legal_name}`}
+                              >
+                                {found.displayBalance.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })}
+                              </Link>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+
+                  {/* 2. LIABILITIES HEAD */}
+                  <tr
+                    onClick={() => toggleHead('LIABILITIES')}
+                    className="bg-sky-950/30 font-bold text-sky-300 cursor-pointer hover:bg-sky-950/50 transition-colors select-none"
+                  >
+                    <td className="py-3 px-4 flex items-center gap-2">
+                      {expandedHeads.LIABILITIES ? <ChevronDown className="w-4 h-4 text-sky-400" /> : <ChevronRight className="w-4 h-4 text-sky-400" />}
+                      <span className="text-sm tracking-tight uppercase">2. TOTAL LIABILITIES</span>
+                    </td>
                     {comparativeData.map((d) => (
                       <td key={d.company.id} className="py-3 px-4 text-right font-mono text-sky-400 text-sm">
                         {d.balance_sheet.totalLiabilities.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })} {d.company.base_currency}
                       </td>
                     ))}
                   </tr>
-                  <tr>
-                    <td className="py-2.5 px-4 text-slate-300 pl-8">Base Equity Capital</td>
-                    {comparativeData.map((d) => (
-                      <td key={d.company.id} className="py-2.5 px-4 text-right font-mono text-slate-200">
-                        {d.balance_sheet.totalEquityBase.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })}
+
+                  {/* Expanded Liability Accounts */}
+                  {expandedHeads.LIABILITIES && getUnifiedAccountsForCategory('liabilities').map((acc) => (
+                    <tr key={acc.code} className="hover:bg-slate-850/40 text-xs">
+                      <td className="py-2 px-4 pl-10 text-slate-300 font-mono">
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400">{acc.code}</span>
+                          <span className="text-slate-200">{acc.name}</span>
+                        </div>
                       </td>
-                    ))}
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 px-4 text-indigo-300 pl-8">Current Period Earnings (P&L)</td>
-                    {comparativeData.map((d) => (
-                      <td key={d.company.id} className="py-2.5 px-4 text-right font-mono text-indigo-300 font-bold">
-                        {d.balance_sheet.currentPeriodEarnings.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })}
-                      </td>
-                    ))}
-                  </tr>
-                  <tr className="bg-indigo-950/20 font-bold text-indigo-300">
-                    <td className="py-3 px-4">TOTAL EQUITY & RESERVES</td>
+                      {comparativeData.map((d) => {
+                        const found = (d.category_accounts?.liabilities || []).find((a: any) => a.code === acc.code);
+                        return (
+                          <td key={d.company.id} className="py-2 px-4 text-right font-mono">
+                            {found && found.displayBalance > 0 ? (
+                              <Link
+                                href={`/ledger?accountId=${found.id}`}
+                                className="text-slate-100 hover:text-sky-400 hover:underline font-bold"
+                                title={`Click to view ${acc.name} ledger for ${d.company.legal_name}`}
+                              >
+                                {found.displayBalance.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })}
+                              </Link>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+
+                  {/* 3. EQUITY & RESERVES HEAD */}
+                  <tr
+                    onClick={() => toggleHead('EQUITY')}
+                    className="bg-indigo-950/30 font-bold text-indigo-300 cursor-pointer hover:bg-indigo-950/50 transition-colors select-none"
+                  >
+                    <td className="py-3 px-4 flex items-center gap-2">
+                      {expandedHeads.EQUITY ? <ChevronDown className="w-4 h-4 text-indigo-400" /> : <ChevronRight className="w-4 h-4 text-indigo-400" />}
+                      <span className="text-sm tracking-tight uppercase">3. TOTAL EQUITY & RESERVES</span>
+                    </td>
                     {comparativeData.map((d) => (
                       <td key={d.company.id} className="py-3 px-4 text-right font-mono text-indigo-300 text-sm">
                         {d.balance_sheet.totalEquityWithEarnings.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })} {d.company.base_currency}
                       </td>
                     ))}
                   </tr>
+
+                  {/* Expanded Equity Accounts */}
+                  {expandedHeads.EQUITY && (
+                    <>
+                      {getUnifiedAccountsForCategory('equity').map((acc) => (
+                        <tr key={acc.code} className="hover:bg-slate-850/40 text-xs">
+                          <td className="py-2 px-4 pl-10 text-slate-300 font-mono">
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-400">{acc.code}</span>
+                              <span className="text-slate-200">{acc.name}</span>
+                            </div>
+                          </td>
+                          {comparativeData.map((d) => {
+                            const found = (d.category_accounts?.equity || []).find((a: any) => a.code === acc.code);
+                            return (
+                              <td key={d.company.id} className="py-2 px-4 text-right font-mono">
+                                {found && found.displayBalance > 0 ? (
+                                  <Link
+                                    href={`/ledger?accountId=${found.id}`}
+                                    className="text-slate-100 hover:text-indigo-400 hover:underline font-bold"
+                                  >
+                                    {found.displayBalance.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })}
+                                  </Link>
+                                ) : (
+                                  <span className="text-slate-600">—</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                      {/* Current Period Earnings Row */}
+                      <tr className="bg-indigo-950/20 text-xs font-semibold text-indigo-200">
+                        <td className="py-2 px-4 pl-10">
+                          <span>Current Period Net Earnings (From P&L)</span>
+                        </td>
+                        {comparativeData.map((d) => (
+                          <td key={d.company.id} className="py-2 px-4 text-right font-mono font-bold text-indigo-300">
+                            {d.balance_sheet.currentPeriodEarnings.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })}
+                          </td>
+                        ))}
+                      </tr>
+                    </>
+                  )}
+
+                  {/* GRAND TOTAL */}
                   <tr className="bg-slate-900 font-bold border-t-2 border-slate-700 text-slate-100">
                     <td className="py-3 px-4 uppercase">TOTAL LIABILITIES & EQUITY</td>
                     {comparativeData.map((d) => (
@@ -323,25 +541,100 @@ export default function MultiCompanyComparisonPage() {
                 </>
               )}
 
-              {/* TAB 2: PROFIT & LOSS COMPARATIVE */}
+              {/* TAB 2: PROFIT & LOSS COMPARATIVE WITH EXPANDABLE HEADS */}
               {activeTab === 'PL' && (
                 <>
-                  <tr className="bg-emerald-950/20 font-bold text-emerald-300">
-                    <td className="py-3 px-4">OPERATING REVENUE</td>
+                  {/* 1. OPERATING REVENUE HEAD */}
+                  <tr
+                    onClick={() => toggleHead('REVENUE')}
+                    className="bg-emerald-950/30 font-bold text-emerald-300 cursor-pointer hover:bg-emerald-950/50 transition-colors select-none"
+                  >
+                    <td className="py-3 px-4 flex items-center gap-2">
+                      {expandedHeads.REVENUE ? <ChevronDown className="w-4 h-4 text-emerald-400" /> : <ChevronRight className="w-4 h-4 text-emerald-400" />}
+                      <span className="text-sm tracking-tight uppercase">1. OPERATING REVENUE</span>
+                    </td>
                     {comparativeData.map((d) => (
                       <td key={d.company.id} className="py-3 px-4 text-right font-mono text-emerald-400 text-sm">
                         {d.income_statement.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })} {d.company.base_currency}
                       </td>
                     ))}
                   </tr>
-                  <tr className="bg-amber-950/20 font-bold text-amber-300">
-                    <td className="py-3 px-4">OPERATING EXPENSES</td>
+
+                  {/* Expanded Revenue Accounts */}
+                  {expandedHeads.REVENUE && getUnifiedAccountsForCategory('revenue').map((acc) => (
+                    <tr key={acc.code} className="hover:bg-slate-850/40 text-xs">
+                      <td className="py-2 px-4 pl-10 text-slate-300 font-mono">
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400">{acc.code}</span>
+                          <span className="text-slate-200">{acc.name}</span>
+                        </div>
+                      </td>
+                      {comparativeData.map((d) => {
+                        const found = (d.category_accounts?.revenue || []).find((a: any) => a.code === acc.code);
+                        return (
+                          <td key={d.company.id} className="py-2 px-4 text-right font-mono">
+                            {found && found.displayBalance > 0 ? (
+                              <Link
+                                href={`/ledger?accountId=${found.id}`}
+                                className="text-slate-100 hover:text-emerald-400 hover:underline font-bold"
+                              >
+                                {found.displayBalance.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })}
+                              </Link>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+
+                  {/* 2. OPERATING EXPENSES HEAD */}
+                  <tr
+                    onClick={() => toggleHead('EXPENSES')}
+                    className="bg-amber-950/30 font-bold text-amber-300 cursor-pointer hover:bg-amber-950/50 transition-colors select-none"
+                  >
+                    <td className="py-3 px-4 flex items-center gap-2">
+                      {expandedHeads.EXPENSES ? <ChevronDown className="w-4 h-4 text-amber-400" /> : <ChevronRight className="w-4 h-4 text-amber-400" />}
+                      <span className="text-sm tracking-tight uppercase">2. OPERATING EXPENSES</span>
+                    </td>
                     {comparativeData.map((d) => (
                       <td key={d.company.id} className="py-3 px-4 text-right font-mono text-amber-400 text-sm">
                         {d.income_statement.totalExpenses.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })} {d.company.base_currency}
                       </td>
                     ))}
                   </tr>
+
+                  {/* Expanded Expense Accounts */}
+                  {expandedHeads.EXPENSES && getUnifiedAccountsForCategory('expenses').map((acc) => (
+                    <tr key={acc.code} className="hover:bg-slate-850/40 text-xs">
+                      <td className="py-2 px-4 pl-10 text-slate-300 font-mono">
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400">{acc.code}</span>
+                          <span className="text-slate-200">{acc.name}</span>
+                        </div>
+                      </td>
+                      {comparativeData.map((d) => {
+                        const found = (d.category_accounts?.expenses || []).find((a: any) => a.code === acc.code);
+                        return (
+                          <td key={d.company.id} className="py-2 px-4 text-right font-mono">
+                            {found && found.displayBalance > 0 ? (
+                              <Link
+                                href={`/ledger?accountId=${found.id}`}
+                                className="text-slate-100 hover:text-amber-400 hover:underline font-bold"
+                              >
+                                {found.displayBalance.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })}
+                              </Link>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+
+                  {/* NET OPERATING PROFIT FOOTER */}
                   <tr className="bg-slate-900 font-bold border-t-2 border-slate-700">
                     <td className="py-3.5 px-4 text-slate-100 uppercase">NET OPERATING PROFIT / (LOSS)</td>
                     {comparativeData.map((d) => (
@@ -366,16 +659,16 @@ export default function MultiCompanyComparisonPage() {
               {/* TAB 3: TRIAL BALANCE COMPARATIVE */}
               {activeTab === 'TB' && (
                 <>
-                  <tr>
-                    <td className="py-3 px-4 font-bold text-emerald-400">Total Debit Footing</td>
+                  <tr className="bg-emerald-950/20 font-bold text-emerald-300">
+                    <td className="py-3 px-4">Total Debit Footing</td>
                     {comparativeData.map((d) => (
                       <td key={d.company.id} className="py-3 px-4 text-right font-mono font-bold text-emerald-400">
                         {d.trial_balance.totalDebits.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })} {d.company.base_currency}
                       </td>
                     ))}
                   </tr>
-                  <tr>
-                    <td className="py-3 px-4 font-bold text-sky-400">Total Credit Footing</td>
+                  <tr className="bg-sky-950/20 font-bold text-sky-300">
+                    <td className="py-3 px-4">Total Credit Footing</td>
                     {comparativeData.map((d) => (
                       <td key={d.company.id} className="py-3 px-4 text-right font-mono font-bold text-sky-400">
                         {d.trial_balance.totalCredits.toLocaleString(undefined, { minimumFractionDigits: d.company.decimal_places })} {d.company.base_currency}

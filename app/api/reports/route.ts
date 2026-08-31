@@ -56,6 +56,8 @@ export async function GET(req: Request) {
 
         comparativeData.push({
           company: comp,
+          tree,
+          flattened,
           trial_balance: {
             totalDebits,
             totalCredits,
@@ -77,12 +79,12 @@ export async function GET(req: Request) {
             netProfit,
             marginPercentage
           },
-          accounts_summary: {
-            assets: assetNodes.map(n => ({ code: n.code, name: n.name, balance: n.displayBalance })),
-            liabilities: liabilityNodes.map(n => ({ code: n.code, name: n.name, balance: n.displayBalance })),
-            equity: equityNodes.map(n => ({ code: n.code, name: n.name, balance: n.displayBalance })),
-            revenue: revenueNodes.map(n => ({ code: n.code, name: n.name, balance: n.displayBalance })),
-            expenses: expenseNodes.map(n => ({ code: n.code, name: n.name, balance: n.displayBalance }))
+          category_accounts: {
+            assets: flattened.filter(n => n.type === 'ASSET'),
+            liabilities: flattened.filter(n => n.type === 'LIABILITY'),
+            equity: flattened.filter(n => n.type === 'EQUITY'),
+            revenue: flattened.filter(n => n.type === 'REVENUE'),
+            expenses: flattened.filter(n => n.type === 'EXPENSE')
           }
         });
       }
