@@ -18,7 +18,9 @@ import {
   FileText, 
   SlidersHorizontal,
   ChevronRight,
-  ShieldCheck
+  ShieldCheck,
+  Columns,
+  Database
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -41,19 +43,21 @@ const NAV_ITEMS = [
     ]
   },
   {
-    category: 'Governance & Legal',
-    items: [
-      { name: 'Entity & Cap Table', href: '/governance', icon: Building2 },
-    ]
-  },
-  {
     category: 'Financial Reporting',
     items: [
       { name: 'Trial Balance', href: '/reports/trial-balance', icon: BarChart3 },
       { name: 'Balance Sheet', href: '/reports/balance-sheet', icon: PieChart },
       { name: 'Profit & Loss', href: '/reports/income-statement', icon: FileText },
+      { name: 'Multi-Company Compare', href: '/reports/comparison', icon: Columns },
       { name: 'Tag Dimensions (#)', href: '/reports/tag-matrix', icon: FileSpreadsheet },
       { name: 'Custom Pivot Designer', href: '/reports/designer', icon: SlidersHorizontal },
+    ]
+  },
+  {
+    category: 'Administration & Governance',
+    items: [
+      { name: 'Entity Management', href: '/governance', icon: Building2 },
+      { name: 'Backup & Audit Trail', href: '/backup', icon: Database },
     ]
   }
 ];

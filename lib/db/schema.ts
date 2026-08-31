@@ -12,6 +12,18 @@ export type EntryStatus = 'DRAFT' | 'PENDING_APPROVAL' | 'POSTED' | 'REVERSED';
 export type QueueStatus = 'PENDING' | 'APPROVED' | 'DISMISSED' | 'PROCESSED';
 export type ActionQueueType = 'MISSING_RECURRING_BILL' | 'ATTESTATION_DUE' | 'INTERCOMPANY_MIRROR_DRAFT' | 'FLOW_TEMPLATE_BATCH' | 'ANOMALY_DETECTED';
 
+export type AuditEventType = 
+  | 'COMPANY_CREATED' 
+  | 'PROFILE_ALTERED' 
+  | 'BOOKS_LOCKED' 
+  | 'VOUCHER_POSTED' 
+  | 'VOUCHER_REVERSED' 
+  | 'FLOW_BATCH_EXECUTED' 
+  | 'BACKUP_GENERATED' 
+  | 'BACKUP_RESTORED'
+  | 'OFFICER_ALTERED'
+  | 'CAP_TABLE_ALTERED';
+
 export interface Company {
   id: string;
   legal_name: string;
@@ -19,6 +31,7 @@ export interface Company {
   jurisdiction: string;
   registration_number: string;
   tax_identifier?: string;
+  registered_address?: string;
   company_type: CompanyType;
   base_currency: string;
   decimal_places: number;
@@ -169,5 +182,15 @@ export interface IntercompanyLink {
   target_company_id: string;
   target_account_id: string;
   mirror_direction_inverse: number; // 1 = invert debit/credit on target
+  created_at: string;
+}
+
+export interface AuditEvent {
+  id: string;
+  company_id: string;
+  event_type: AuditEventType;
+  actor: string;
+  description: string;
+  metadata?: string;
   created_at: string;
 }

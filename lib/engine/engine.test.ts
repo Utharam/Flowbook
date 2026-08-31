@@ -1,6 +1,6 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { getDb } from '../db';
+import { getDb, logAuditEvent } from '../db';
 import { Company, FlowTemplate } from '../db/schema';
 import { validateJournalEntry, postJournalEntry, createMirrorReversal } from './accounting';
 import { generateFxSettlementLines, getExchangeRate } from './multi-currency';
@@ -211,5 +211,20 @@ describe('Flowbook Double-Entry & Multi-Currency Engine Tests', () => {
     });
     assert.strictEqual(step2Res.success, true);
     assert.ok(step2Res.entry);
+  });
+
+  test('Audit Event Logging & Immutable Trail', () => {
+    const db = getDb();
+    logAuditEvent(company.id, 'PROFILE_ALTERED', 'Auditor SID', 'Altered registered address for tax filing', { tax_year: 2026 });
+
+    const event = db.prepare(`
+      SELECT * FROM audit_events 
+      WHERE company_id = ? AND event_type = 'PROFILE_ALTERED'
+      ORDER BY created_at DESC LIMIT 1
+    `).get(company.id) as any;
+
+    assert.ok(event, 'Audit event must be logged');
+    assert.strictEqual(event.actor, 'Auditor SID');
+    assert.ok(event.description.includes('registered address'));
   });
 });

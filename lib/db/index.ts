@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
+import { AuditEventType } from './schema';
 
 let dbInstance: DatabaseSync | null = null;
 
@@ -22,6 +23,28 @@ export function getDb(): DatabaseSync {
   return dbInstance;
 }
 
+export function logAuditEvent(
+  companyId: string,
+  eventType: AuditEventType,
+  actor: string,
+  description: string,
+  metadata?: any
+) {
+  try {
+    const db = getDb();
+    const eventId = `aud_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const now = new Date().toISOString();
+    const metaStr = typeof metadata === 'object' ? JSON.stringify(metadata) : metadata || null;
+
+    db.prepare(`
+      INSERT INTO audit_events (id, company_id, event_type, actor, description, metadata, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(eventId, companyId, eventType, actor || 'System', description, metaStr, now);
+  } catch (err) {
+    console.error('Failed to log audit event:', err);
+  }
+}
+
 function initSchemaAndSeed(db: DatabaseSync) {
   // 1. Core Companies / Legal Entities
   db.exec(`
@@ -32,6 +55,7 @@ function initSchemaAndSeed(db: DatabaseSync) {
       jurisdiction TEXT NOT NULL,
       registration_number TEXT NOT NULL,
       tax_identifier TEXT,
+      registered_address TEXT,
       company_type TEXT NOT NULL DEFAULT 'PVT_LTD',
       base_currency TEXT NOT NULL DEFAULT 'USD',
       decimal_places INTEGER NOT NULL DEFAULT 2,
@@ -159,7 +183,22 @@ function initSchemaAndSeed(db: DatabaseSync) {
       mirror_direction_inverse INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      actor TEXT NOT NULL DEFAULT 'System',
+      description TEXT NOT NULL,
+      metadata TEXT,
+      created_at TEXT NOT NULL
+    );
   `);
+
+  // Run schema additions for registered_address if not present
+  try {
+    db.exec(`ALTER TABLE companies ADD COLUMN registered_address TEXT;`);
+  } catch {}
 
   seedInitialData(db);
 }
@@ -167,7 +206,6 @@ function initSchemaAndSeed(db: DatabaseSync) {
 function seedInitialData(db: DatabaseSync) {
   const companyCheck = db.prepare('SELECT COUNT(*) as count FROM companies').get() as { count: number };
   if (companyCheck && companyCheck.count > 0) {
-    // Check if multi-step templates need upgrading
     upgradeTemplatesIfLegacy(db);
     return;
   }
@@ -178,11 +216,11 @@ function seedInitialData(db: DatabaseSync) {
   db.prepare(`
     INSERT INTO companies (
       id, legal_name, trade_name, jurisdiction, registration_number, 
-      tax_identifier, company_type, base_currency, decimal_places, 
+      tax_identifier, registered_address, company_type, base_currency, decimal_places, 
       financial_year_start_month, lock_date, created_at
     ) VALUES (
       'cmp_utharam_global', 'Utharam Enterprises Private Limited', 'Utharam Global',
-      'India', 'U72900KA2024PTC188231', '29ABCDE1234F1Z5', 'PVT_LTD',
+      'India', 'U72900KA2024PTC188231', '29ABCDE1234F1Z5', 'Level 8, Nexus Cyber Tower, Bengaluru 560100, India', 'PVT_LTD',
       'USD', 2, 4, '2025-12-31', ?
     )
   `).run(now);
@@ -191,11 +229,11 @@ function seedInitialData(db: DatabaseSync) {
   db.prepare(`
     INSERT INTO companies (
       id, legal_name, trade_name, jurisdiction, registration_number, 
-      tax_identifier, company_type, base_currency, decimal_places, 
+      tax_identifier, registered_address, company_type, base_currency, decimal_places, 
       financial_year_start_month, lock_date, created_at
     ) VALUES (
       'cmp_utharam_mea', 'Utharam MEA FZ-LLC', 'Utharam Middle East',
-      'UAE', 'FZ-LLC-2025-9981', 'TRN-100298374600003', 'LLC',
+      'UAE', 'FZ-LLC-2025-9981', 'TRN-100298374600003', 'Office 402, Building 3, Dubai Internet City, Dubai, UAE', 'LLC',
       'AED', 2, 1, '2025-12-31', ?
     )
   `).run(now);
@@ -289,6 +327,9 @@ function seedInitialData(db: DatabaseSync) {
 
   // 8. Seed Initial Opening Balances & Sample Multi-Currency Transactions
   seedSampleJournalEntries(db, now);
+
+  // 9. Log Initial Audit Event
+  logAuditEvent('cmp_utharam_global', 'COMPANY_CREATED', 'System Seeder', 'Initialized Utharam Enterprises Private Limited corporate books');
 }
 
 function seedMultiStepTemplates(db: DatabaseSync, now: string) {

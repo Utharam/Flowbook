@@ -14,7 +14,12 @@ import {
   AlertCircle, 
   UserCheck, 
   UserX,
-  Building 
+  Building,
+  CheckCircle2,
+  MapPin,
+  Coins,
+  ArrowRight,
+  Sparkles
 } from 'lucide-react';
 
 export default function GovernancePage() {
@@ -53,6 +58,7 @@ export default function GovernancePage() {
     jurisdiction: 'India',
     registration_number: '',
     tax_identifier: '',
+    registered_address: '',
     company_type: 'PVT_LTD',
     base_currency: 'USD',
     decimal_places: 2,
@@ -60,8 +66,8 @@ export default function GovernancePage() {
     seed_standard_coa: true
   });
   const [creatingCompany, setCreatingCompany] = useState(false);
-
   const [savingCompany, setSavingCompany] = useState(false);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
 
   const fetchGovernanceData = async () => {
     if (!activeCompanyId) return;
@@ -88,6 +94,7 @@ export default function GovernancePage() {
         jurisdiction: activeCompany.jurisdiction,
         registration_number: activeCompany.registration_number,
         tax_identifier: activeCompany.tax_identifier || '',
+        registered_address: activeCompany.registered_address || '',
         company_type: activeCompany.company_type,
         base_currency: activeCompany.base_currency,
         decimal_places: activeCompany.decimal_places,
@@ -102,6 +109,7 @@ export default function GovernancePage() {
     e.preventDefault();
     try {
       setSavingCompany(true);
+      setSaveSuccessMessage(null);
       const res = await fetch('/api/companies', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -112,8 +120,9 @@ export default function GovernancePage() {
       });
       const data = await res.json();
       if (data.success) {
-        alert('Company profile & compliance parameters updated successfully!');
+        setSaveSuccessMessage('Corporate profile, registered address & parameters updated successfully!');
         await refreshCompanies();
+        setTimeout(() => setSaveSuccessMessage(null), 4000);
       } else {
         alert(`Failed: ${data.error}`);
       }
@@ -145,6 +154,7 @@ export default function GovernancePage() {
           jurisdiction: 'India',
           registration_number: '',
           tax_identifier: '',
+          registered_address: '',
           company_type: 'PVT_LTD',
           base_currency: 'USD',
           decimal_places: 2,
@@ -229,27 +239,116 @@ export default function GovernancePage() {
         <div>
           <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-1">
             <Building2 className="w-4 h-4" />
-            <span>Entity Governance & Compliance Register</span>
+            <span>Entity & Corporate Governance Management</span>
           </div>
           <h1 className="text-2xl font-bold text-white tracking-tight">
-            Corporate Identity, Directors & UBO Cap Table
+            Organization Center, Profile & Cap Table
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Manage statutory profile, Financial Year parameters, closed period lock date, Key Management Personnel, and Ultimate Beneficial Owners.
+            Switch between entities, alter corporate profiles, manage Key Management Personnel, and track UBO cap tables.
           </p>
         </div>
 
         <button
           type="button"
           onClick={() => setShowCreateCompanyModal(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-700/25 transition-all self-start sm:self-auto"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-700/25 transition-all self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
-          <span>+ Create New Entity</span>
+          <span>+ Add New Entity</span>
         </button>
       </div>
 
-      {/* 1. Legal Entity Profile & Accounting Settings */}
+      {/* 1. All Registered Corporate Entities Grid */}
+      <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+          <div className="flex items-center gap-2.5">
+            <Building className="w-5 h-5 text-emerald-400" />
+            <h2 className="text-sm font-bold text-white uppercase tracking-wider">
+              Registered Corporate Entities ({companies.length})
+            </h2>
+          </div>
+          <span className="text-xs text-slate-400">Click any entity card to switch active books</span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {companies.map((c) => {
+            const isActive = c.id === activeCompanyId;
+
+            return (
+              <div
+                key={c.id}
+                onClick={() => setActiveCompanyId(c.id)}
+                className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col justify-between space-y-3 ${
+                  isActive
+                    ? 'bg-emerald-950/40 border-emerald-500/80 shadow-lg shadow-emerald-900/20 ring-1 ring-emerald-500/50'
+                    : 'bg-slate-900/90 border-slate-800 hover:border-slate-700 hover:bg-slate-850'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+                      {c.jurisdiction}
+                    </span>
+                    {isActive ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-300 bg-emerald-950 px-2 py-0.5 rounded-full border border-emerald-700/60">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                        <span>Active Book</span>
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-500 font-medium hover:text-slate-300 flex items-center gap-1">
+                        <span>Switch</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </span>
+                    )}
+                  </div>
+
+                  <h3 className="text-sm font-bold text-white tracking-tight">{c.legal_name}</h3>
+                  {c.trade_name && (
+                    <div className="text-xs text-emerald-400/90 font-medium mt-0.5">
+                      DBA: {c.trade_name}
+                    </div>
+                  )}
+
+                  <div className="mt-3 space-y-1 text-xs text-slate-400">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span>Reg No:</span>
+                      <strong className="text-slate-200 font-mono">{c.registration_number}</strong>
+                    </div>
+                    {c.tax_identifier && (
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span>Tax ID:</span>
+                        <strong className="text-slate-200 font-mono">{c.tax_identifier}</strong>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span>Currency:</span>
+                      <strong className="text-amber-300 font-mono">{c.base_currency} ({c.decimal_places} dec)</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-800/80 text-[11px] text-slate-400 flex items-center justify-between">
+                  <span>FY Start: {c.financial_year_start_month === 4 ? 'April' : c.financial_year_start_month === 1 ? 'January' : `Month ${c.financial_year_start_month}`}</span>
+                  <span className={c.lock_date ? 'text-amber-400' : 'text-emerald-400'}>
+                    {c.lock_date ? `Locked: ${c.lock_date}` : 'Books Open'}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Save Success Banner */}
+      {saveSuccessMessage && (
+        <div className="p-4 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-xs flex items-center gap-2 shadow-lg">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{saveSuccessMessage}</span>
+        </div>
+      )}
+
+      {/* 2. Alter Active Entity Profile & Compliance Parameters */}
       <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-sm">
         <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
           <div className="flex items-center gap-3">
@@ -257,8 +356,12 @@ export default function GovernancePage() {
               <Building2 className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-white">Statutory Entity Profile & Financial Year</h2>
-              <p className="text-xs text-slate-400">Jurisdiction, Registration IDs, Base Currency, and Closed Books Barrier.</p>
+              <h2 className="text-base font-bold text-white">
+                Alter Active Entity Profile: <span className="text-emerald-400">{activeCompany?.legal_name}</span>
+              </h2>
+              <p className="text-xs text-slate-400">
+                Update legal name, registered address, tax numbers, base currency, and period lock dates.
+              </p>
             </div>
           </div>
         </div>
@@ -292,6 +395,20 @@ export default function GovernancePage() {
               required
               value={companyForm.jurisdiction || ''}
               onChange={(e) => setCompanyForm({ ...companyForm, jurisdiction: e.target.value })}
+              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:border-emerald-500 focus:outline-none"
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
+              <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Registered Corporate Address</span>
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Level 8, Nexus Cyber Tower, Bengaluru 560100, India"
+              value={companyForm.registered_address || ''}
+              onChange={(e) => setCompanyForm({ ...companyForm, registered_address: e.target.value })}
               className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:border-emerald-500 focus:outline-none"
             />
           </div>
@@ -332,7 +449,6 @@ export default function GovernancePage() {
             </select>
           </div>
 
-          {/* Accounting Engine Parameters */}
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">Base Operating Currency</label>
             <select
@@ -397,13 +513,13 @@ export default function GovernancePage() {
               disabled={savingCompany}
               className="w-full py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md shadow-emerald-700/20 transition-all disabled:opacity-50"
             >
-              {savingCompany ? 'Saving Profile...' : 'Save Corporate Profile'}
+              {savingCompany ? 'Saving Profile...' : 'Save & Alter Corporate Profile'}
             </button>
           </div>
         </form>
       </div>
 
-      {/* 2. Directors & Key Management Personnel (KMP) */}
+      {/* 3. Directors & Key Management Personnel (KMP) */}
       <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-sm">
         <div className="flex items-center justify-between mb-4 pb-4 border-b border-slate-800">
           <div className="flex items-center gap-3">
@@ -475,7 +591,7 @@ export default function GovernancePage() {
         </div>
       </div>
 
-      {/* 3. Shareholding Pattern & Ultimate Beneficial Owners (UBO) */}
+      {/* 4. Shareholding Pattern & Ultimate Beneficial Owners (UBO) */}
       <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-sm">
         <div className="flex items-center justify-between mb-4 pb-4 border-b border-slate-800">
           <div className="flex items-center gap-3">
@@ -581,7 +697,7 @@ export default function GovernancePage() {
               </div>
               <div>
                 <h3 className="text-base font-bold text-white">Create New Entity from Scratch</h3>
-                <p className="text-xs text-slate-400">Set up a fresh company workspace while keeping your reference companies safe.</p>
+                <p className="text-xs text-slate-400">Set up a fresh company workspace while keeping reference companies safe.</p>
               </div>
             </div>
 
@@ -618,6 +734,17 @@ export default function GovernancePage() {
                     placeholder="e.g. India, UAE, Delaware (US), UK"
                     value={newCompanyForm.jurisdiction}
                     onChange={(e) => setNewCompanyForm({ ...newCompanyForm, jurisdiction: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-slate-300 font-semibold mb-1">Registered Address</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Plot 45, MIDC Industrial Area, Mumbai 400093, India"
+                    value={newCompanyForm.registered_address}
+                    onChange={(e) => setNewCompanyForm({ ...newCompanyForm, registered_address: e.target.value })}
                     className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                   />
                 </div>

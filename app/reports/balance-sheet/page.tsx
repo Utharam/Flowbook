@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useCompany } from '@/components/context/company-context';
 import { 
   PieChart, 
@@ -9,25 +10,39 @@ import {
   Calendar, 
   CheckCircle2, 
   AlertCircle, 
-  Building, 
-  ShieldCheck, 
-  TrendingDown 
+  Folder, 
+  FileText, 
+  ChevronRight, 
+  ChevronDown, 
+  BookOpen,
+  ArrowRight
 } from 'lucide-react';
 import { AccountTreeNode } from '@/lib/engine/coa-tree';
 
 export default function BalanceSheetPage() {
   const { activeCompany, activeCompanyId, formatAmount } = useCompany();
   const [data, setData] = useState<any>(null);
-  const [asOfDate, setAsOfDate] = useState(new Date().toISOString().substring(0, 10));
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+
+  const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({
+    acc_1000: true,
+    acc_1100: true,
+    acc_1500: true,
+    acc_2000: true,
+    acc_2100: true,
+    acc_3000: true
+  });
 
   const fetchBalanceSheet = async () => {
     if (!activeCompanyId) return;
     try {
       setIsLoading(true);
       let url = `/api/reports?companyId=${activeCompanyId}&type=balance-sheet`;
-      if (asOfDate) url += `&endDate=${asOfDate}`;
-      
+      if (startDate) url += `&startDate=${startDate}`;
+      if (endDate) url += `&endDate=${endDate}`;
+
       const res = await fetch(url);
       const json = await res.json();
       if (json.success) {
@@ -42,10 +57,96 @@ export default function BalanceSheetPage() {
 
   useEffect(() => {
     fetchBalanceSheet();
-  }, [activeCompanyId, asOfDate]);
+  }, [activeCompanyId, startDate, endDate]);
 
-  const handlePrint = () => {
-    window.print();
+  const toggleExpand = (id: string) => {
+    setExpandedNodes(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const exportCSV = () => {
+    if (!data) return;
+    const rows = [
+      [`Flowbook by Utharam - Balance Sheet`],
+      [`Entity: ${activeCompany?.legal_name}`],
+      [`As of Date: ${endDate || 'Present'}`],
+      [`Base Currency: ${activeCompany?.base_currency}`],
+      [],
+      ['Category', 'Account Code', 'Account Name', 'Balance'],
+      ...data.assets.map((a: AccountTreeNode) => ['Assets', a.code, a.name, a.displayBalance.toFixed(activeCompany?.decimal_places || 2)]),
+      ['Total Assets', '', '', data.totals.totalAssets.toFixed(activeCompany?.decimal_places || 2)],
+      [],
+      ...data.liabilities.map((l: AccountTreeNode) => ['Liabilities', l.code, l.name, l.displayBalance.toFixed(activeCompany?.decimal_places || 2)]),
+      ['Total Liabilities', '', '', data.totals.totalLiabilities.toFixed(activeCompany?.decimal_places || 2)],
+      [],
+      ...data.equity.map((e: AccountTreeNode) => ['Equity', e.code, e.name, e.displayBalance.toFixed(activeCompany?.decimal_places || 2)]),
+      ['Current Period Earnings (P&L)', '', '', data.totals.currentPeriodEarnings.toFixed(activeCompany?.decimal_places || 2)],
+      ['Total Equity with Earnings', '', '', data.totals.totalEquityWithEarnings.toFixed(activeCompany?.decimal_places || 2)],
+      [],
+      ['Total Liabilities & Equity', '', '', data.totals.totalLiabilitiesAndEquity.toFixed(activeCompany?.decimal_places || 2)]
+    ];
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + rows.map(e => e.join(',')).join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Balance_Sheet_${activeCompany?.legal_name}_${new Date().toISOString().substring(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const renderAccountRow = (node: AccountTreeNode) => {
+    const isGroup = node.is_group === 1;
+    const hasChildren = node.children && node.children.length > 0;
+    const isExpanded = expandedNodes[node.id];
+
+    return (
+      <React.Fragment key={node.id}>
+        <tr className={`hover:bg-slate-850/50 transition-colors group ${isGroup ? 'bg-slate-900/40 font-bold' : ''}`}>
+          <td className="py-2.5 px-4" style={{ paddingLeft: `${node.level * 18 + 16}px` }}>
+            <div className="flex items-center gap-2">
+              {hasChildren ? (
+                <button
+                  type="button"
+                  onClick={() => toggleExpand(node.id)}
+                  className="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-white"
+                >
+                  {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                </button>
+              ) : (
+                <div className="w-4" />
+              )}
+
+              {isGroup ? (
+                <Folder className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              ) : (
+                <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              )}
+
+              <span className="font-mono text-slate-400">{node.code}</span>
+
+              {isGroup ? (
+                <span className="text-white">{node.name}</span>
+              ) : (
+                <Link
+                  href={`/ledger?accountId=${node.id}`}
+                  className="text-slate-200 hover:text-emerald-400 font-medium hover:underline decoration-dotted flex items-center gap-1.5"
+                  title="Click to view detailed Account Ledger"
+                >
+                  <span>{node.name}</span>
+                  <BookOpen className="w-3 h-3 text-slate-500 group-hover:text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </Link>
+              )}
+            </div>
+          </td>
+          <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-100 whitespace-nowrap">
+            {formatAmount(node.displayBalance)}
+          </td>
+        </tr>
+
+        {hasChildren && isExpanded && node.children.map(child => renderAccountRow(child))}
+      </React.Fragment>
+    );
   };
 
   const totals = data?.totals || {
@@ -58,34 +159,6 @@ export default function BalanceSheetPage() {
     isBalanced: true
   };
 
-  const renderSection = (title: string, nodes: AccountTreeNode[], total: number, icon: any) => {
-    const Icon = icon;
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center justify-between pb-2 border-b border-slate-800 text-xs font-bold uppercase tracking-wider text-slate-300">
-          <div className="flex items-center gap-2">
-            <Icon className="w-4 h-4 text-emerald-400" />
-            <span>{title}</span>
-          </div>
-          <span className="font-mono text-white text-sm">{formatAmount(total)}</span>
-        </div>
-
-        <div className="space-y-1.5 pl-2">
-          {nodes.map(node => (
-            <div key={node.id} className="flex items-center justify-between text-xs py-1 hover:bg-slate-800/30 px-2 rounded-lg">
-              <span className="text-slate-300 font-medium">
-                {node.code} - {node.name}
-              </span>
-              <span className="font-mono font-semibold text-slate-100">
-                {formatAmount(node.displayBalance)}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -96,16 +169,23 @@ export default function BalanceSheetPage() {
             <span>Financial Statements</span>
           </div>
           <h1 className="text-2xl font-bold text-white tracking-tight">
-            Statement of Financial Position (Balance Sheet)
+            Classified Balance Sheet
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Assets = Liabilities + Equity invariant verified with dynamic retained earnings integration.
+            Statement of Financial Position with dynamic Current Period Retained Earnings and inner ledger drilldown.
           </p>
         </div>
 
         <div className="flex items-center gap-2.5">
           <button
-            onClick={handlePrint}
+            onClick={exportCSV}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Export CSV</span>
+          </button>
+          <button
+            onClick={() => window.print()}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
           >
             <Printer className="w-3.5 h-3.5" />
@@ -114,72 +194,139 @@ export default function BalanceSheetPage() {
         </div>
       </div>
 
-      {/* Date Filter & Balancing Status */}
+      {/* Date Filter & Balancing Bar */}
       <div className="bg-[#0f172a] border border-slate-800 p-4 rounded-2xl flex flex-wrap items-center justify-between gap-4 no-print">
-        <div className="flex items-center gap-2 text-xs text-slate-300">
-          <Calendar className="w-4 h-4 text-emerald-400" />
-          <span>Statement As Of:</span>
-          <input
-            type="date"
-            value={asOfDate}
-            onChange={(e) => setAsOfDate(e.target.value)}
-            className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
-          />
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 text-xs text-slate-300">
+            <Calendar className="w-4 h-4 text-emerald-400" />
+            <span>As of Date:</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
+            />
+          </div>
         </div>
 
         <div>
           {totals.isBalanced ? (
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-950 text-emerald-300 border border-emerald-800/60">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Balance Sheet Invariant Balanced: Assets = Liabilities + Equity</span>
+            <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold bg-emerald-950 text-emerald-300 border border-emerald-800/60 shadow-sm">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <span>Accounting Invariant Balanced: Assets = Liabilities + Equity</span>
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-950 text-rose-300 border border-rose-800/60">
-              <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
-              <span>Imbalance Variance: {formatAmount(totals.balanceCheck)}</span>
+            <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold bg-rose-950 text-rose-300 border border-rose-800/60 shadow-sm">
+              <AlertCircle className="w-4 h-4 text-rose-400" />
+              <span>Balance Sheet Out of Balance</span>
             </span>
           )}
         </div>
       </div>
 
-      {/* Balance Sheet Statement Document */}
-      <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-8 shadow-sm space-y-8">
-        {/* Title */}
+      {/* Report Container */}
+      <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-sm space-y-6">
+        {/* Header */}
         <div className="text-center pb-4 border-b border-slate-800 space-y-1">
           <div className="text-xs uppercase tracking-widest text-emerald-400 font-bold">Flowbook by Utharam</div>
-          <h2 className="text-xl font-bold text-white">{activeCompany?.legal_name}</h2>
+          <h2 className="text-lg font-bold text-white">{activeCompany?.legal_name}</h2>
           <div className="text-xs text-slate-400">
-            Balance Sheet as of {asOfDate} | Currency: {activeCompany?.base_currency}
+            Statement of Financial Position as of {endDate || new Date().toISOString().substring(0, 10)} | Base Currency: {activeCompany?.base_currency}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Left Column: Assets */}
-          <div className="space-y-6">
-            {renderSection('Assets', data?.assets || [], totals.totalAssets, Building)}
+        {/* 2-Column Balance Sheet Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* LEFT: ASSETS */}
+          <div className="space-y-4">
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden shadow-inner">
+              <div className="p-3 bg-emerald-950/50 border-b border-slate-800 flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-300">
+                  1. Assets (Debit Normal)
+                </h3>
+                <span className="text-xs font-mono font-bold text-emerald-400">
+                  {formatAmount(totals.totalAssets)}
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <tbody className="divide-y divide-slate-800/60">
+                    {(data?.assets || []).map((node: AccountTreeNode) => renderAccountRow(node))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
 
-            {/* Total Assets Callout */}
-            <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between text-sm font-bold text-emerald-400 font-mono">
-              <span className="text-white uppercase text-xs">Total Assets</span>
-              <span>{formatAmount(totals.totalAssets)}</span>
+            {/* Total Assets Summary Box */}
+            <div className="p-4 rounded-xl bg-emerald-950/60 border border-emerald-800/80 flex items-center justify-between font-bold text-sm">
+              <span className="text-emerald-200">TOTAL ASSETS</span>
+              <span className="font-mono text-emerald-300 text-base">
+                {formatAmount(totals.totalAssets)}
+              </span>
             </div>
           </div>
 
-          {/* Right Column: Liabilities & Equity */}
-          <div className="space-y-6">
-            {renderSection('Liabilities', data?.liabilities || [], totals.totalLiabilities, TrendingDown)}
-            {renderSection('Equity & Capital', data?.equity || [], totals.totalEquityBase, ShieldCheck)}
-
-            {/* Retained Period Earnings */}
-            <div className="flex items-center justify-between text-xs py-1 px-4 bg-slate-900/60 rounded-lg border border-slate-800">
-              <span className="text-slate-300 font-medium italic">Current Period Net Earnings (P&L Integration)</span>
-              <span className="font-mono font-bold text-emerald-400">{formatAmount(totals.currentPeriodEarnings)}</span>
+          {/* RIGHT: LIABILITIES & EQUITY */}
+          <div className="space-y-4">
+            {/* Liabilities */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden shadow-inner">
+              <div className="p-3 bg-sky-950/50 border-b border-slate-800 flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-sky-300">
+                  2. Liabilities (Credit Normal)
+                </h3>
+                <span className="text-xs font-mono font-bold text-sky-400">
+                  {formatAmount(totals.totalLiabilities)}
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <tbody className="divide-y divide-slate-800/60">
+                    {(data?.liabilities || []).map((node: AccountTreeNode) => renderAccountRow(node))}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
-            {/* Total Liabilities & Equity Callout */}
-            <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between text-sm font-bold text-sky-400 font-mono">
-              <span className="text-white uppercase text-xs">Total Liabilities & Equity</span>
-              <span>{formatAmount(totals.totalLiabilitiesAndEquity)}</span>
+            {/* Equity & Retained Earnings */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden shadow-inner">
+              <div className="p-3 bg-indigo-950/50 border-b border-slate-800 flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-300">
+                  3. Equity & Reserves
+                </h3>
+                <span className="text-xs font-mono font-bold text-indigo-400">
+                  {formatAmount(totals.totalEquityWithEarnings)}
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <tbody className="divide-y divide-slate-800/60">
+                    {(data?.equity || []).map((node: AccountTreeNode) => renderAccountRow(node))}
+                    {/* Dynamic P&L Earnings Row */}
+                    <tr className="bg-indigo-950/30 font-semibold text-indigo-200">
+                      <td className="py-2.5 px-6">
+                        <div className="flex items-center gap-2">
+                          <FileText className="w-3.5 h-3.5 text-indigo-400" />
+                          <Link href="/reports/income-statement" className="hover:underline flex items-center gap-1">
+                            <span>Current Period Net Earnings (From P&L)</span>
+                            <ArrowRight className="w-3 h-3" />
+                          </Link>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-mono font-bold text-indigo-300 whitespace-nowrap">
+                        {formatAmount(totals.currentPeriodEarnings)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Total Liabilities & Equity Summary Box */}
+            <div className="p-4 rounded-xl bg-sky-950/60 border border-sky-800/80 flex items-center justify-between font-bold text-sm">
+              <span className="text-sky-200">TOTAL LIABILITIES & EQUITY</span>
+              <span className="font-mono text-sky-300 text-base">
+                {formatAmount(totals.totalLiabilitiesAndEquity)}
+              </span>
             </div>
           </div>
         </div>
