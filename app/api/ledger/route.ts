@@ -26,7 +26,6 @@ export async function GET(req: Request) {
         ORDER BY code ASC
       `).all(companyId) as unknown) as Account[];
 
-      // Compute summary metrics for each leaf account
       const directoryList = accounts.map(acc => {
         const lines = db.prepare(`
           SELECT jl.amount, jl.currency
@@ -139,7 +138,9 @@ export async function GET(req: Request) {
         je.memo as entry_memo,
         je.reference,
         je.is_reversal,
+        je.reversed_from_id,
         je.created_by,
+        je.created_at as entry_created_at,
         jl.id as line_id,
         jl.currency as line_currency,
         jl.exchange_rate,
@@ -179,7 +180,7 @@ export async function GET(req: Request) {
         })
       : rows;
 
-    // 2.3. Compute Counter Ledgers & Chronological Running Balance
+    // 2.3. Compute Counter Ledgers, Full Voucher Breakdown & Running Balance
     let runningBalance = openingBalance;
     let periodDebits = 0;
     let periodCredits = 0;
@@ -205,23 +206,68 @@ export async function GET(req: Request) {
         parsedLineTags = JSON.parse(row.line_tags || '[]');
       } catch {}
 
-      // Find Counter Ledgers (Other accounts on this voucher)
-      const otherLines = db.prepare(`
-        SELECT a.id, a.code, a.name, a.type, jl.amount
+      // Fetch all lines of this voucher for the instant Enter inspection modal
+      const allVoucherLines = db.prepare(`
+        SELECT 
+          jl.id,
+          jl.account_id,
+          a.code as account_code,
+          a.name as account_name,
+          a.type as account_type,
+          jl.amount,
+          jl.foreign_amount,
+          jl.currency,
+          jl.exchange_rate,
+          jl.memo,
+          jl.tags
         FROM journal_lines jl
         JOIN accounts a ON jl.account_id = a.id
-        WHERE jl.entry_id = ? AND jl.account_id != ?
-      `).all(row.entry_id, accountId) as Array<{ id: string; code: string; name: string; type: string; amount: number }>;
+        WHERE jl.entry_id = ?
+        ORDER BY jl.amount ASC, a.code ASC
+      `).all(row.entry_id) as any[];
+
+      const formattedVoucherLines = allVoucherLines.map(vl => {
+        let ltags: string[] = [];
+        try { ltags = JSON.parse(vl.tags || '[]'); } catch {}
+        return {
+          id: vl.id,
+          accountId: vl.account_id,
+          accountCode: vl.account_code,
+          accountName: vl.account_name,
+          accountType: vl.account_type,
+          isDebit: vl.amount < 0,
+          side: vl.amount < 0 ? 'Dr' : 'Cr',
+          amount: Math.abs(vl.amount),
+          foreignAmount: Math.abs(vl.foreign_amount),
+          currency: vl.currency,
+          exchangeRate: vl.exchange_rate,
+          memo: vl.memo,
+          tags: ltags
+        };
+      });
+
+      // Find Counter Ledgers (Other accounts on this voucher)
+      const otherLines = allVoucherLines.filter(l => l.account_id !== accountId);
 
       let counterLedgerText = '—';
       let primaryCounterAccount: any = null;
 
       if (otherLines.length === 1) {
-        primaryCounterAccount = otherLines[0];
-        counterLedgerText = `${otherLines[0].code} - ${otherLines[0].name}`;
+        primaryCounterAccount = {
+          id: otherLines[0].account_id,
+          code: otherLines[0].account_code,
+          name: otherLines[0].account_name,
+          type: otherLines[0].account_type
+        };
+        counterLedgerText = `${otherLines[0].account_code} - ${otherLines[0].account_name}`;
       } else if (otherLines.length > 1) {
-        primaryCounterAccount = otherLines[0];
-        counterLedgerText = `${otherLines[0].code} - ${otherLines[0].name} (+${otherLines.length - 1} split)`;
+        primaryCounterAccount = {
+          id: otherLines[0].account_id,
+          code: otherLines[0].account_code,
+          name: otherLines[0].account_name,
+          type: otherLines[0].account_type
+        };
+        counterLedgerText = `${otherLines[0].account_code} - ${otherLines[0].account_name} (+${otherLines.length - 1} split)`;
       }
 
       return {
@@ -229,13 +275,16 @@ export async function GET(req: Request) {
         entryId: row.entry_id,
         entryNumber: row.entry_number,
         entryDate: row.entry_date,
+        entryCreatedAt: row.entry_created_at,
         particulars: row.line_memo || row.entry_memo || 'General Journal Entry',
         narration: row.line_memo || row.entry_memo || '',
         reference: row.reference || '',
         counterLedgerText,
         counterLedgers: otherLines,
         primaryCounterAccount,
+        allVoucherLines: formattedVoucherLines,
         isReversal: row.is_reversal === 1,
+        reversedFromId: row.reversed_from_id,
         createdBy: row.created_by,
         lineCurrency: row.line_currency,
         exchangeRate: row.exchange_rate,

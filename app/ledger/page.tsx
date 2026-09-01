@@ -34,7 +34,9 @@ import {
   Edit2,
   Check,
   ArrowUpRight,
-  Keyboard
+  Keyboard,
+  RotateCcw,
+  ExternalLink
 } from 'lucide-react';
 import { AccountType, SopStep, TriggerRules } from '@/lib/db/schema';
 
@@ -64,11 +66,14 @@ function LedgerContent() {
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
 
+  // Voucher Inspection Modal State (Triggered on Enter)
+  const [inspectingVoucher, setInspectingVoucher] = useState<any | null>(null);
+
   // View Options
   const [showNarrations, setShowNarrations] = useState(true);
   const [showForeignCurrencies, setShowForeignCurrencies] = useState(false);
 
-  // Inline Narration Edit State
+  // Inline Narration Edit State (Triggered on Shift+Enter or 'e' or pencil icon)
   const [editingMemoLineId, setEditingMemoLineId] = useState<string | null>(null);
   const [editingMemoText, setEditingMemoText] = useState<string>('');
   const [isSavingMemo, setIsSavingMemo] = useState(false);
@@ -189,15 +194,27 @@ function LedgerContent() {
     });
   }, [ledgerData, inLedgerSearch]);
 
-  // Keyboard Navigation Listener (Arrow Up / Down / Enter / Esc)
+  // Keyboard Navigation: Enter (View Voucher), Shift+Enter (Edit Memo), Esc (Close / Cancel), Arrows
   useEffect(() => {
-    if (!selectedAccountId || filteredTransactions.length === 0) return;
+    if (!selectedAccountId) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // If user is currently typing in an input or textarea, let normal typing happen
-      const activeTag = document.activeElement?.tagName.toLowerCase();
-      const isTypingInInput = activeTag === 'input' || activeTag === 'textarea';
+      // 1. If Voucher Inspector Modal is open, Escape closes it
+      if (inspectingVoucher) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setInspectingVoucher(null);
+        } else if (e.key === 'e' || e.key === 'F2') {
+          e.preventDefault();
+          const targetLineId = inspectingVoucher.lineId;
+          const targetMemo = inspectingVoucher.particulars;
+          setInspectingVoucher(null);
+          startEditingMemo(targetLineId, targetMemo);
+        }
+        return;
+      }
 
+      // 2. If Inline Memo is being edited, Escape cancels
       if (editingMemoLineId) {
         if (e.key === 'Escape') {
           cancelEditingMemo();
@@ -205,8 +222,14 @@ function LedgerContent() {
         return;
       }
 
+      // If user is currently typing in an input field (search, date, etc.), ignore navigation
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      const isTypingInInput = activeTag === 'input' || activeTag === 'textarea';
       if (isTypingInInput) return;
 
+      if (filteredTransactions.length === 0) return;
+
+      // 3. Arrow Navigation
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setSelectedIndex((prev) => {
@@ -230,23 +253,33 @@ function LedgerContent() {
         const last = filteredTransactions.length - 1;
         setSelectedIndex(last);
         rowRefs.current[last]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      } else if (e.key === 'Enter' || e.key === 'e' || e.key === 'F2') {
+      } 
+      // 4. Shift+Enter or 'e' -> Edit Narration
+      else if ((e.key === 'Enter' && e.shiftKey) || e.key === 'e' || e.key === 'F2') {
         e.preventDefault();
         const activeTx = filteredTransactions[selectedIndex];
         if (activeTx) {
           startEditingMemo(activeTx.lineId, activeTx.particulars);
         }
       }
+      // 5. Enter (plain) -> Open Voucher Drilldown Modal
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        const activeTx = filteredTransactions[selectedIndex];
+        if (activeTx) {
+          setInspectingVoucher(activeTx);
+        }
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedAccountId, filteredTransactions, selectedIndex, editingMemoLineId]);
+  }, [selectedAccountId, filteredTransactions, selectedIndex, editingMemoLineId, inspectingVoucher]);
 
   // Filtered Directory Accounts
   const filteredDirectoryAccounts = useMemo(() => {
     return directoryAccounts.filter(acc => {
-      if (acc.is_group === 1) return false; // Show leaf posting accounts in directory
+      if (acc.is_group === 1) return false;
       if (directoryCategoryFilter !== 'ALL' && acc.type !== directoryCategoryFilter) return false;
       if (!directorySearch.trim()) return true;
 
@@ -345,6 +378,37 @@ function LedgerContent() {
       alert(`Error updating narration: ${err.message}`);
     } finally {
       setIsSavingMemo(false);
+    }
+  };
+
+  // 1-Click Mirror Reversal from Modal
+  const handleMirrorReversal = async (entryId: string) => {
+    if (!activeCompanyId) return;
+    const confirmRev = window.confirm('Are you sure you want to create an immutable Mirror Reversal for this voucher?');
+    if (!confirmRev) return;
+
+    try {
+      const res = await fetch('/api/journal/reverse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: activeCompanyId,
+          entryId,
+          reversalDate: new Date().toISOString().substring(0, 10),
+          reason: 'Manual accountant reversal from Ledger Inspection'
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        alert('Mirror Reversal voucher created and posted successfully!');
+        setInspectingVoucher(null);
+        fetchData();
+      } else {
+        alert(`Reversal failed: ${data.error}`);
+      }
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
     }
   };
 
@@ -812,11 +876,11 @@ function LedgerContent() {
               {/* Keyboard Shortcuts Hint */}
               <div className="hidden md:flex items-center gap-2 text-slate-400">
                 <Keyboard className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Navigate: <kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono">↑</kbd> <kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono">↓</kbd></span>
+                <span><kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono font-bold">Enter</kbd> View Entry</span>
                 <span>•</span>
-                <span>Edit Narration: <kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono">Enter</kbd></span>
+                <span><kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono font-bold">Shift+Enter</kbd> / <kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono font-bold">E</kbd> Edit Narration</span>
                 <span>•</span>
-                <span>Cancel: <kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono">Esc</kbd></span>
+                <span><kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono font-bold">Esc</kbd> Exit</span>
               </div>
             </div>
           </div>
@@ -871,6 +935,7 @@ function LedgerContent() {
                         <tr
                           ref={(el) => { rowRefs.current[idx] = el; }}
                           onClick={() => setSelectedIndex(idx)}
+                          onDoubleClick={() => setInspectingVoucher(tx)}
                           className={`cursor-pointer transition-all ${rowBgClass} hover:bg-slate-850/80`}
                         >
                           {/* Date with active cursor indicator */}
@@ -884,9 +949,14 @@ function LedgerContent() {
                           {/* Voucher Number */}
                           <td className="py-2.5 px-4 font-mono font-bold text-slate-200 whitespace-nowrap">
                             <div className="flex items-center gap-1.5">
-                              <Link href="/vouchers" className="hover:text-emerald-400 hover:underline">
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setInspectingVoucher(tx); }}
+                                className="hover:text-emerald-400 hover:underline text-left"
+                                title="Click to view full voucher breakdown"
+                              >
                                 {tx.entryNumber}
-                              </Link>
+                              </button>
                               {tx.isReversal && (
                                 <span className="px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 text-[10px] font-bold border border-rose-800/50">
                                   REV
@@ -900,6 +970,7 @@ function LedgerContent() {
                             {tx.primaryCounterAccount ? (
                               <Link
                                 href={`/ledger?accountId=${tx.primaryCounterAccount.id}`}
+                                onClick={(e) => e.stopPropagation()}
                                 className="font-semibold text-slate-100 hover:text-emerald-400 hover:underline inline-flex items-center gap-1.5 group/link"
                                 title={`Drill into ${tx.counterLedgerText}`}
                               >
@@ -968,6 +1039,7 @@ function LedgerContent() {
                         {showNarrations && (
                           <tr
                             onClick={() => setSelectedIndex(idx)}
+                            onDoubleClick={() => setInspectingVoucher(tx)}
                             className={`border-b border-slate-800/80 transition-colors ${rowBgClass}`}
                           >
                             <td colSpan={showForeignCurrencies ? 8 : 7} className="py-1.5 px-4 pl-12 text-[11px]">
@@ -1018,9 +1090,9 @@ function LedgerContent() {
 
                                   <button
                                     type="button"
-                                    onClick={() => startEditingMemo(tx.lineId, tx.particulars)}
+                                    onClick={(e) => { e.stopPropagation(); startEditingMemo(tx.lineId, tx.particulars); }}
                                     className="opacity-0 group-hover/memo:opacity-100 flex items-center gap-1 text-[10px] text-slate-400 hover:text-emerald-400 px-2 py-0.5 rounded hover:bg-slate-800 transition-all shrink-0 font-medium not-italic"
-                                    title="Edit Narration / Memo (Press Enter or click)"
+                                    title="Edit Narration (Shift+Enter or E)"
                                   >
                                     <Edit2 className="w-3 h-3" />
                                     <span>Edit</span>
@@ -1043,6 +1115,203 @@ function LedgerContent() {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* INSTANT VOUCHER DRILLDOWN & INSPECTOR MODAL (TRIGGERED ON ENTER)           */}
+      {/* ========================================================================= */}
+      {inspectingVoucher && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setInspectingVoucher(null)}
+        >
+          <div 
+            className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold">
+                  <FileText className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-white font-mono">
+                      {inspectingVoucher.entryNumber}
+                    </h3>
+                    <span className="px-2 py-0.2 rounded bg-emerald-950 text-emerald-400 text-[10px] font-bold border border-emerald-800/60">
+                      POSTED
+                    </span>
+                    {inspectingVoucher.isReversal && (
+                      <span className="px-2 py-0.2 rounded bg-rose-950 text-rose-400 text-[10px] font-bold border border-rose-800/60">
+                        MIRROR REVERSAL
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+                    <span>Date: <strong className="text-slate-200 font-mono">{inspectingVoucher.entryDate}</strong></span>
+                    {inspectingVoucher.reference && (
+                      <>
+                        <span>•</span>
+                        <span>Ref: <strong className="text-slate-200 font-mono">{inspectingVoucher.reference}</strong></span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setInspectingVoucher(null)}
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-white flex items-center justify-center transition-colors"
+                title="Close (Esc)"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-5 space-y-4 overflow-y-auto text-xs">
+              {/* Double-Entry Posting Breakdown */}
+              <div className="space-y-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Double-Entry Ledger Lines
+                </span>
+
+                <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-950">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-900 text-slate-400 text-[10px] uppercase font-semibold border-b border-slate-800">
+                      <tr>
+                        <th className="py-2 px-3 w-16">Side</th>
+                        <th className="py-2 px-3">Ledger Account</th>
+                        <th className="py-2 px-3 text-right">Debit (DR)</th>
+                        <th className="py-2 px-3 text-right">Credit (CR)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {inspectingVoucher.allVoucherLines?.map((line: any) => {
+                        const isCurrentAccount = line.accountId === selectedAccountId;
+
+                        return (
+                          <tr key={line.id} className={isCurrentAccount ? 'bg-emerald-950/20 font-semibold' : ''}>
+                            {/* Side Pill */}
+                            <td className="py-2.5 px-3">
+                              <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                                line.side === 'Dr'
+                                  ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
+                                  : 'bg-sky-950 text-sky-400 border border-sky-800/60'
+                              }`}>
+                                {line.side}
+                              </span>
+                            </td>
+
+                            {/* Ledger Account */}
+                            <td className="py-2.5 px-3">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-emerald-400 font-bold">{line.accountCode}</span>
+                                <span className="text-slate-100">{line.accountName}</span>
+                                {isCurrentAccount && (
+                                  <span className="text-[10px] text-emerald-400 font-mono">(This Ledger)</span>
+                                )}
+                              </div>
+                              {line.foreignAmount && line.currency !== activeCompany?.base_currency && (
+                                <div className="text-[10px] text-amber-300 font-mono mt-0.5">
+                                  {line.foreignAmount.toLocaleString()} {line.currency} @ {line.exchangeRate}
+                                </div>
+                              )}
+                            </td>
+
+                            {/* Debit */}
+                            <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-400 whitespace-nowrap">
+                              {line.isDebit ? formatAmount(line.amount) : '—'}
+                            </td>
+
+                            {/* Credit */}
+                            <td className="py-2.5 px-3 text-right font-mono font-semibold text-sky-400 whitespace-nowrap">
+                              {!line.isDebit ? formatAmount(line.amount) : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Full Narration & Memos */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Narration / Memo</span>
+                <p className="text-xs text-slate-200 italic">
+                  "{inspectingVoucher.particulars}"
+                </p>
+              </div>
+
+              {/* Tags & Metadata */}
+              <div className="flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-400 pt-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-300">Tags:</span>
+                  {inspectingVoucher.tags && inspectingVoucher.tags.length > 0 ? (
+                    inspectingVoucher.tags.map((t: string) => (
+                      <span key={t} className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 font-mono text-[10px]">
+                        {t}
+                      </span>
+                    ))
+                  ) : (
+                    <span>None</span>
+                  )}
+                </div>
+
+                <div>
+                  Posted by: <strong className="text-slate-200">{inspectingVoucher.createdBy || 'Accountant SID'}</strong>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer with Actions & Esc hint */}
+            <div className="p-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs text-slate-400 font-mono">
+                <Keyboard className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 font-bold">Esc</kbd> to return to ledger</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetLineId = inspectingVoucher.lineId;
+                    const targetMemo = inspectingVoucher.particulars;
+                    setInspectingVoucher(null);
+                    startEditingMemo(targetLineId, targetMemo);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+                >
+                  <Edit2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Edit Narration</span>
+                </button>
+
+                {!inspectingVoucher.isReversal && (
+                  <button
+                    type="button"
+                    onClick={() => handleMirrorReversal(inspectingVoucher.entryId)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-950/80 hover:bg-rose-900 text-rose-300 text-xs font-semibold border border-rose-800/60 transition-colors"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Mirror Reversal</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setInspectingVoucher(null)}
+                  className="px-4 py-1.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-750 text-xs font-semibold"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>
