@@ -104,6 +104,8 @@ function initSchemaAndSeed(db: DatabaseSync) {
       tags TEXT NOT NULL DEFAULT '[]',
       sop_steps TEXT NOT NULL DEFAULT '[]',
       trigger_rules TEXT NOT NULL DEFAULT '{}',
+      last_reconciled_date TEXT,
+      last_reconciled_balance REAL,
       is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
     );
@@ -203,6 +205,8 @@ function initSchemaAndSeed(db: DatabaseSync) {
   try { db.exec(`ALTER TABLE accounts ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';`); } catch {}
   try { db.exec(`ALTER TABLE accounts ADD COLUMN sop_steps TEXT NOT NULL DEFAULT '[]';`); } catch {}
   try { db.exec(`ALTER TABLE accounts ADD COLUMN trigger_rules TEXT NOT NULL DEFAULT '{}';`); } catch {}
+  try { db.exec(`ALTER TABLE accounts ADD COLUMN last_reconciled_date TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE accounts ADD COLUMN last_reconciled_balance REAL;`); } catch {}
 
   seedInitialData(db);
 }
@@ -378,6 +382,12 @@ function seedDefaultSopsIfMissing(db: DatabaseSync) {
         alert_on_unusual_variance: true
       })
     );
+
+    // 3. Set default reconciled date for Operating Bank Account (acc_1110)
+    db.prepare(`
+      UPDATE accounts SET last_reconciled_date = '2026-01-31'
+      WHERE id = 'acc_1110' AND last_reconciled_date IS NULL
+    `).run();
   } catch {}
 }
 

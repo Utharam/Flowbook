@@ -23,7 +23,8 @@ export type AuditEventType =
   | 'BACKUP_RESTORED'
   | 'OFFICER_ALTERED'
   | 'CAP_TABLE_ALTERED'
-  | 'LEDGER_GOVERNANCE_UPDATED';
+  | 'LEDGER_GOVERNANCE_UPDATED'
+  | 'BANK_STATEMENT_BATCH_IMPORTED';
 
 export interface Company {
   id: string;
@@ -93,6 +94,8 @@ export interface Account {
   tags?: string[];
   sop_steps?: SopStep[];
   trigger_rules?: TriggerRules;
+  last_reconciled_date?: string; // YYYY-MM-DD
+  last_reconciled_balance?: number;
   is_active: number;
   created_at: string;
 }

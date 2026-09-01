@@ -1,0 +1,455 @@
+import { getDb, logAuditEvent } from '@/lib/db';
+import { Company, Account } from '@/lib/db/schema';
+import { postJournalEntry } from './accounting';
+
+export interface BankImportValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  metadata: {
+    targetAccountId: string;
+    targetAccountCode: string;
+    targetAccountName: string;
+    lastReconciledDate?: string | null;
+    openingBalance: number;
+    totalInflows: number;
+    totalOutflows: number;
+    netMovement: number;
+    computedEndingBalance: number;
+    targetStatementBalance?: number | null;
+    variance?: number | null;
+    rowCount: number;
+    validRowCount: number;
+  };
+  parsedRows: Array<{
+    rowNumber: number;
+    date: string;
+    reference: string;
+    counterAccountId?: string;
+    counterAccountCode?: string;
+    counterAccountName?: string;
+    counterAccountType?: string;
+    narration: string;
+    amount: number;
+    isInflow: boolean;
+    debit: number;
+    credit: number;
+    tags: string[];
+    error?: string;
+  }>;
+}
+
+/**
+ * 1. Generate Pre-formatted Bank Statement Import CSV Template
+ */
+export function generateBankImportTemplate(
+  company: Company,
+  account: Account,
+  currentOpeningBalance: number
+): string {
+  const reconciledDate = account.last_reconciled_date || '2026-01-31';
+  const balanceSide = account.type === 'ASSET' ? 'Dr' : 'Cr';
+
+  const lines = [
+    `# =========================================================================================`,
+    `# FLOWBOOK BY UTHARAM - BANK STATEMENT & BATCH JOURNAL IMPORT TEMPLATE`,
+    `# =========================================================================================`,
+    `# METADATA: COMPANY_ID=${company.id} | ACCOUNT_ID=${account.id} | ACCOUNT_CODE=${account.code} | ACCOUNT_NAME=${account.name}`,
+    `# RECONCILED_TILL_DATE: ${reconciledDate}`,
+    `# OPENING_RECONCILED_BALANCE: ${currentOpeningBalance.toFixed(company.decimal_places)} ${balanceSide}`,
+    `# TARGET_STATEMENT_CLOSING_BALANCE: [ENTER_YOUR_BANK_STATEMENT_ENDING_BALANCE_HERE]`,
+    `# `,
+    `# RULES & INSTRUCTIONS:`,
+    `# 1. Transaction Date must be in YYYY-MM-DD format and strictly after ${reconciledDate}.`,
+    `# 2. Counter_Ledger can be either the Account Code (e.g. 5200) or exact Account Name (e.g. Office Rent).`,
+    `# 3. Amount: Positive (+) for Inflows / Deposits; Negative (-) for Outflows / Withdrawals / Charges.`,
+    `# 4. Tags: Space or comma separated tags starting with # (e.g. #Vendor #HQ).`,
+    `# =========================================================================================`,
+    `Date,Bank_Reference_UTR,Counter_Ledger,Particulars_Narration,Amount,Tags`,
+    `2026-02-05,NEFT-889102,4100,Direct Customer Inflow for Advisory Services,15000.00,#Sales`,
+    `2026-02-12,CHQ-10029,5200,Corporate Office Facilities & Maintenance Payment,-3200.00,#Facilities`,
+    `2026-02-20,UPI-394810,5400,Production Cloud Infrastructure & Compute Bill,-1250.00,#Cloud`
+  ];
+
+  return lines.join('\n');
+}
+
+/**
+ * 2. Validate Uploaded Bank Statement CSV / Text
+ */
+export function validateBankImportContent(
+  company: Company,
+  targetAccount: Account,
+  fileContent: string
+): BankImportValidationResult {
+  const db = getDb();
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Fetch all active accounts for counter ledger matching
+  const allAccounts = (db.prepare(`
+    SELECT id, code, name, type, is_group 
+    FROM accounts 
+    WHERE company_id = ? AND is_active = 1
+  `).all(company.id) as unknown) as Account[];
+
+  const leafAccounts = allAccounts.filter(a => a.is_group === 0);
+
+  // Compute starting opening balance up to targetAccount.last_reconciled_date
+  let startingBalance = 0;
+  const isDebitNormal = targetAccount.type === 'ASSET' || targetAccount.type === 'EXPENSE';
+
+  if (targetAccount.last_reconciled_date) {
+    const priorLines = db.prepare(`
+      SELECT jl.amount
+      FROM journal_lines jl
+      JOIN journal_entries je ON jl.entry_id = je.id
+      WHERE je.company_id = ? AND jl.account_id = ? AND je.status = 'POSTED' AND je.entry_date <= ?
+    `).all(company.id, targetAccount.id, targetAccount.last_reconciled_date) as Array<{ amount: number }>;
+
+    let debits = 0;
+    let credits = 0;
+    for (const l of priorLines) {
+      if (l.amount < 0) debits += Math.abs(l.amount);
+      else credits += l.amount;
+    }
+    startingBalance = isDebitNormal ? (debits - credits) : (credits - debits);
+  }
+
+  // Parse lines
+  const rawLines = fileContent.split(/\r?\n/);
+  let targetStatementBalance: number | null = null;
+  const dataLines: Array<{ lineNum: number; text: string }> = [];
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i].trim();
+    if (!line) continue;
+
+    if (line.startsWith('#')) {
+      // Check for target closing balance metadata
+      const targetMatch = line.match(/TARGET_STATEMENT_CLOSING_BALANCE:\s*([0-9.,-]+)/i);
+      if (targetMatch && !isNaN(parseFloat(targetMatch[1]))) {
+        targetStatementBalance = parseFloat(targetMatch[1]);
+      }
+      continue;
+    }
+
+    dataLines.push({ lineNum: i + 1, text: line });
+  }
+
+  if (dataLines.length === 0) {
+    return {
+      valid: false,
+      errors: ['The uploaded file contains no transaction data rows.'],
+      warnings: [],
+      metadata: {
+        targetAccountId: targetAccount.id,
+        targetAccountCode: targetAccount.code,
+        targetAccountName: targetAccount.name,
+        lastReconciledDate: targetAccount.last_reconciled_date,
+        openingBalance: startingBalance,
+        totalInflows: 0,
+        totalOutflows: 0,
+        netMovement: 0,
+        computedEndingBalance: startingBalance,
+        targetStatementBalance,
+        rowCount: 0,
+        validRowCount: 0
+      },
+      parsedRows: []
+    };
+  }
+
+  // Check header row
+  let startIndex = 0;
+  const firstLine = dataLines[0].text.toLowerCase();
+  if (firstLine.includes('date') && (firstLine.includes('amount') || firstLine.includes('counter_ledger'))) {
+    startIndex = 1; // Skip header
+  }
+
+  const parsedRows: BankImportValidationResult['parsedRows'] = [];
+  let totalInflows = 0;
+  let totalOutflows = 0;
+  const lastReconciled = targetAccount.last_reconciled_date || null;
+
+  for (let idx = startIndex; idx < dataLines.length; idx++) {
+    const { lineNum, text } = dataLines[idx];
+    
+    // Parse CSV columns (handling quotes)
+    const cols = parseCsvLine(text);
+    if (cols.length < 3) {
+      errors.push(`Row ${lineNum}: Insufficient columns. Minimum required: Date, Counter_Ledger, Amount.`);
+      continue;
+    }
+
+    // Mapping columns:
+    // Format A (6 cols): Date, Bank_Reference_UTR, Counter_Ledger, Particulars_Narration, Amount, Tags
+    // Format B (5 cols): Date, Reference, Counter_Ledger, Narration, Amount
+    // Format C (4 cols): Date, Counter_Ledger, Narration, Amount
+    let rowDate = '';
+    let rowRef = '';
+    let rowCounter = '';
+    let rowNarration = '';
+    let rowAmountStr = '';
+    let rowTagsStr = '';
+
+    if (cols.length >= 6) {
+      [rowDate, rowRef, rowCounter, rowNarration, rowAmountStr, rowTagsStr] = cols;
+    } else if (cols.length === 5) {
+      [rowDate, rowRef, rowCounter, rowNarration, rowAmountStr] = cols;
+    } else if (cols.length === 4) {
+      [rowDate, rowCounter, rowNarration, rowAmountStr] = cols;
+    } else if (cols.length === 3) {
+      [rowDate, rowCounter, rowAmountStr] = cols;
+    }
+
+    rowDate = (rowDate || '').trim();
+    rowRef = (rowRef || '').trim();
+    rowCounter = (rowCounter || '').trim();
+    rowNarration = (rowNarration || '').trim();
+    rowAmountStr = (rowAmountStr || '').replace(/[\$,]/g, '').trim();
+
+    let rowError: string | undefined;
+
+    // 1. Validate Date format (YYYY-MM-DD)
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(rowDate) || isNaN(Date.parse(rowDate))) {
+      rowError = `Invalid date format "${rowDate}". Must be YYYY-MM-DD.`;
+      errors.push(`Row ${lineNum}: ${rowError}`);
+    } else if (lastReconciled && rowDate <= lastReconciled) {
+      // 2. Validate Reconciled Date Barrier
+      rowError = `Date ${rowDate} is on or before the last reconciled closing date (${lastReconciled}). Backdating is prohibited.`;
+      errors.push(`Row ${lineNum}: ${rowError}`);
+    }
+
+    // 3. Validate Amount
+    const amountVal = parseFloat(rowAmountStr);
+    if (isNaN(amountVal) || Math.abs(amountVal) < 0.0001) {
+      rowError = `Invalid numeric amount "${rowAmountStr}".`;
+      errors.push(`Row ${lineNum}: ${rowError}`);
+    }
+
+    // 4. Validate Counter Ledger Matching
+    let matchedAccount: Account | undefined;
+    if (rowCounter) {
+      const cleanCounter = rowCounter.toLowerCase();
+      // Match by exact code, or case-insensitive name, or exact id
+      matchedAccount = leafAccounts.find(a => 
+        a.code.toLowerCase() === cleanCounter || 
+        a.name.toLowerCase() === cleanCounter || 
+        a.id.toLowerCase() === cleanCounter
+      );
+
+      // If still not matched, check if account name contains search term
+      if (!matchedAccount) {
+        matchedAccount = leafAccounts.find(a => 
+          a.name.toLowerCase().includes(cleanCounter) ||
+          cleanCounter.includes(a.name.toLowerCase())
+        );
+      }
+    }
+
+    if (!matchedAccount) {
+      rowError = `Counter ledger "${rowCounter}" could not be resolved in the active Chart of Accounts.`;
+      errors.push(`Row ${lineNum}: ${rowError}`);
+    } else if (matchedAccount.id === targetAccount.id) {
+      rowError = `Counter ledger cannot be the same as the target bank account (${targetAccount.code} - ${targetAccount.name}).`;
+      errors.push(`Row ${lineNum}: ${rowError}`);
+    }
+
+    const isInflow = amountVal > 0;
+    const absAmount = Math.abs(amountVal);
+
+    if (isInflow) {
+      totalInflows += absAmount;
+    } else {
+      totalOutflows += absAmount;
+    }
+
+    // Parse tags
+    let tagsList: string[] = [];
+    if (rowTagsStr) {
+      tagsList = rowTagsStr
+        .split(/[\s,]+/)
+        .map(t => t.trim())
+        .filter(t => t.length > 0)
+        .map(t => t.startsWith('#') ? t : `#${t}`);
+    }
+
+    parsedRows.push({
+      rowNumber: lineNum,
+      date: rowDate,
+      reference: rowRef,
+      counterAccountId: matchedAccount?.id,
+      counterAccountCode: matchedAccount?.code,
+      counterAccountName: matchedAccount?.name,
+      counterAccountType: matchedAccount?.type,
+      narration: rowNarration || `Bank ${isInflow ? 'Deposit' : 'Payment'} - Ref: ${rowRef || 'N/A'}`,
+      amount: amountVal,
+      isInflow,
+      debit: isInflow ? absAmount : 0,
+      credit: !isInflow ? absAmount : 0,
+      tags: tagsList,
+      error: rowError
+    });
+  }
+
+  const netMovement = totalInflows - totalOutflows;
+  const computedEndingBalance = startingBalance + netMovement;
+  let variance: number | null = null;
+
+  if (targetStatementBalance !== null) {
+    variance = Math.abs(computedEndingBalance - targetStatementBalance);
+    if (variance > 0.001) {
+      warnings.push(
+        `Statement Balance Mismatch: Computed Ending Balance (${computedEndingBalance.toFixed(company.decimal_places)}) differs from your uploaded statement target (${targetStatementBalance.toFixed(company.decimal_places)}) by variance of ${variance.toFixed(company.decimal_places)}.`
+      );
+    }
+  }
+
+  const validRowCount = parsedRows.filter(r => !r.error).length;
+  const isValid = errors.length === 0 && validRowCount > 0;
+
+  return {
+    valid: isValid,
+    errors,
+    warnings,
+    metadata: {
+      targetAccountId: targetAccount.id,
+      targetAccountCode: targetAccount.code,
+      targetAccountName: targetAccount.name,
+      lastReconciledDate: lastReconciled,
+      openingBalance: startingBalance,
+      totalInflows,
+      totalOutflows,
+      netMovement,
+      computedEndingBalance,
+      targetStatementBalance,
+      variance,
+      rowCount: parsedRows.length,
+      validRowCount
+    },
+    parsedRows
+  };
+}
+
+/**
+ * 3. Execute Atomic Batch Journal Posting & Reconciliation Advance
+ */
+export function executeBankImportBatch(
+  company: Company,
+  targetAccount: Account,
+  validatedRows: BankImportValidationResult['parsedRows'],
+  actor = 'Accountant'
+): { success: boolean; createdCount: number; newReconciledDate: string; endingBalance: number; error?: string } {
+  const db = getDb();
+
+  if (validatedRows.length === 0) {
+    return { success: false, createdCount: 0, newReconciledDate: '', endingBalance: 0, error: 'No validated rows to post.' };
+  }
+
+  // Check for any remaining row errors
+  const hasErrors = validatedRows.some(r => !!r.error || !r.counterAccountId);
+  if (hasErrors) {
+    return { success: false, createdCount: 0, newReconciledDate: '', endingBalance: 0, error: 'Cannot post batch with unresolved validation errors.' };
+  }
+
+  try {
+    let maxDate = targetAccount.last_reconciled_date || '2026-01-01';
+    let postedCount = 0;
+
+    // Post each transaction atomically
+    for (const row of validatedRows) {
+      if (row.date > maxDate) {
+        maxDate = row.date;
+      }
+
+      const absAmount = Math.abs(row.amount);
+      const isDeposit = row.isInflow;
+
+      // For Inflow / Deposit: Dr Bank Account, Cr Counter Ledger
+      // For Outflow / Withdrawal: Dr Counter Ledger, Cr Bank Account
+      const lines = isDeposit
+        ? [
+            { accountId: targetAccount.id, debit: absAmount, currency: targetAccount.currency || company.base_currency, memo: row.narration, tags: row.tags },
+            { accountId: row.counterAccountId!, credit: absAmount, currency: company.base_currency, memo: row.narration, tags: row.tags }
+          ]
+        : [
+            { accountId: row.counterAccountId!, debit: absAmount, currency: company.base_currency, memo: row.narration, tags: row.tags },
+            { accountId: targetAccount.id, credit: absAmount, currency: targetAccount.currency || company.base_currency, memo: row.narration, tags: row.tags }
+          ];
+
+      const res = postJournalEntry(company, {
+        companyId: company.id,
+        entryDate: row.date,
+        memo: row.narration,
+        reference: row.reference || `BANK-IMP-${row.date}`,
+        lines
+      });
+
+      if (!res.success) {
+        throw new Error(`Failed posting row on date ${row.date}: ${res.errors?.join('; ')}`);
+      }
+
+      postedCount++;
+    }
+
+    // Update account last_reconciled_date in SQLite
+    db.prepare(`
+      UPDATE accounts SET last_reconciled_date = ? WHERE id = ?
+    `).run(maxDate, targetAccount.id);
+
+    // Record Audit Event
+    logAuditEvent(
+      company.id,
+      'BANK_STATEMENT_BATCH_IMPORTED',
+      actor,
+      `Imported & reconciled bank statement batch of ${postedCount} transactions for ${targetAccount.code} - ${targetAccount.name}. Reconciled date advanced to ${maxDate}.`,
+      { accountId: targetAccount.id, postedCount, newReconciledDate: maxDate }
+    );
+
+    return {
+      success: true,
+      createdCount: postedCount,
+      newReconciledDate: maxDate,
+      endingBalance: 0
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      createdCount: 0,
+      newReconciledDate: '',
+      endingBalance: 0,
+      error: err.message
+    };
+  }
+}
+
+/**
+ * Helper to parse CSV line handling quotes and commas
+ */
+function parseCsvLine(text: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '"') {
+      if (inQuotes && text[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  result.push(current.trim());
+  return result;
+}

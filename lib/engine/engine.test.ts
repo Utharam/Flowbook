@@ -1,10 +1,11 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { getDb, logAuditEvent } from '../db';
-import { Company, FlowTemplate } from '../db/schema';
+import { Company, Account, FlowTemplate } from '../db/schema';
 import { validateJournalEntry, postJournalEntry, createMirrorReversal } from './accounting';
 import { generateFxSettlementLines, getExchangeRate } from './multi-currency';
 import { getHierarchicalCoa, flattenCoaTree } from './coa-tree';
+import { generateBankImportTemplate, validateBankImportContent, executeBankImportBatch } from './bank-import';
 
 describe('Flowbook Double-Entry & Multi-Currency Engine Tests', () => {
   let company: Company;
@@ -261,5 +262,96 @@ describe('Flowbook Double-Entry & Multi-Currency Engine Tests', () => {
     assert.ok(event, 'Audit event must be logged');
     assert.strictEqual(event.actor, 'Auditor SID');
     assert.ok(event.description.includes('registered address'));
+  });
+
+  test('Smart Bank Statement Import: Template Generation with Embedded Metadata', () => {
+    const db = getDb();
+    const bankAcc = (db.prepare("SELECT * FROM accounts WHERE id = 'acc_1110'").get() as unknown) as Account;
+    assert.ok(bankAcc);
+
+    const templateCsv = generateBankImportTemplate(company, bankAcc, 300000);
+    assert.ok(templateCsv.includes(`ACCOUNT_ID=${bankAcc.id}`));
+    assert.ok(templateCsv.includes(`ACCOUNT_CODE=${bankAcc.code}`));
+    assert.ok(templateCsv.includes('TARGET_STATEMENT_CLOSING_BALANCE:'));
+    assert.ok(templateCsv.includes('Date,Bank_Reference_UTR,Counter_Ledger,Particulars_Narration,Amount,Tags'));
+  });
+
+  test('Smart Bank Statement Import: Rejects Backdated Entries on/before Reconciled Date Barrier', () => {
+    const db = getDb();
+    const bankAcc: Account = {
+      ...(db.prepare("SELECT * FROM accounts WHERE id = 'acc_1110'").get() as any),
+      last_reconciled_date: '2026-01-31'
+    };
+
+    const invalidContent = `
+Date,Reference,Counter_Ledger,Narration,Amount,Tags
+2026-01-15,NEFT-001,4100,Backdated Deposit in Locked Period,5000,#Sales
+2026-02-05,NEFT-002,4100,Valid Feb Deposit,10000,#Sales
+`;
+
+    const validation = validateBankImportContent(company, bankAcc, invalidContent);
+    assert.strictEqual(validation.valid, false);
+    assert.ok(validation.errors.some(e => e.includes('2026-01-15') && e.includes('last reconciled closing date')));
+    assert.strictEqual(validation.parsedRows[0].error !== undefined, true);
+    assert.strictEqual(validation.parsedRows[1].error, undefined);
+  });
+
+  test('Smart Bank Statement Import: Rejects Unresolved Counter Ledgers', () => {
+    const db = getDb();
+    const bankAcc: Account = {
+      ...(db.prepare("SELECT * FROM accounts WHERE id = 'acc_1110'").get() as any),
+      last_reconciled_date: '2026-01-31'
+    };
+
+    const invalidLedgerContent = `
+Date,Reference,Counter_Ledger,Narration,Amount,Tags
+2026-02-05,NEFT-002,NonExistentLedger999,Random Inflow,8000,#Sales
+`;
+
+    const validation = validateBankImportContent(company, bankAcc, invalidLedgerContent);
+    assert.strictEqual(validation.valid, false);
+    assert.ok(validation.errors.some(e => e.includes('NonExistentLedger999') && e.includes('could not be resolved')));
+  });
+
+  test('Smart Bank Statement Import: Validates Mathematical Closing Balance & Executes Atomic Batch Posting', () => {
+    const db = getDb();
+    const bankAcc = (db.prepare("SELECT * FROM accounts WHERE id = 'acc_1110'").get() as unknown) as Account;
+
+    // Opening Balance + Deposits ($20,000) - Withdrawals ($4,500)
+    const validContent = `
+# TARGET_STATEMENT_CLOSING_BALANCE: 315500.00
+Date,Reference,Counter_Ledger,Narration,Amount,Tags
+2026-02-15,NEFT-991,4100,Enterprise Retainer Fee Feb,20000.00,#Consulting
+2026-02-22,CHQ-441,5200,Office Additional Maintenance Facility,-4500.00,#HQ
+`;
+
+    const validation = validateBankImportContent(company, bankAcc, validContent);
+    assert.strictEqual(validation.valid, true);
+    assert.strictEqual(validation.errors.length, 0);
+    assert.strictEqual(validation.parsedRows.length, 2);
+    assert.strictEqual(validation.metadata.totalInflows, 20000);
+    assert.strictEqual(validation.metadata.totalOutflows, 4500);
+    assert.strictEqual(validation.metadata.netMovement, 15500);
+
+    // Execute atomic batch post
+    const postRes = executeBankImportBatch(company, bankAcc, validation.parsedRows, 'Test Auditor');
+    assert.strictEqual(postRes.success, true);
+    assert.strictEqual(postRes.createdCount, 2);
+    assert.strictEqual(postRes.newReconciledDate, '2026-02-22');
+
+    // Verify account's new reconciled date in DB
+    const updatedAcc = db.prepare("SELECT last_reconciled_date FROM accounts WHERE id = 'acc_1110'").get() as any;
+    assert.strictEqual(updatedAcc.last_reconciled_date, '2026-02-22');
+
+    // Verify audit event was logged
+    const auditEvt = db.prepare(`
+      SELECT * FROM audit_events 
+      WHERE company_id = ? AND event_type = 'BANK_STATEMENT_BATCH_IMPORTED'
+      ORDER BY created_at DESC LIMIT 1
+    `).get(company.id) as any;
+
+    assert.ok(auditEvt);
+    assert.strictEqual(auditEvt.actor, 'Test Auditor');
+    assert.ok(auditEvt.description.includes('2026-02-22'));
   });
 });

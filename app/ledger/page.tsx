@@ -5,11 +5,13 @@ import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useCompany } from '@/components/context/company-context';
 import { CreateLedgerModal } from '@/components/accounts/create-ledger-modal';
+import { BankImportModal } from '@/components/accounts/bank-import-modal';
 import { 
   BookOpen, 
   Search, 
   Calendar, 
   Download, 
+  Upload,
   Printer, 
   PlusCircle, 
   FileText, 
@@ -52,6 +54,7 @@ function LedgerContent() {
   const [directorySearch, setDirectorySearch] = useState('');
   const [directoryCategoryFilter, setDirectoryCategoryFilter] = useState<string>('ALL');
   const [showCreateLedgerModal, setShowCreateLedgerModal] = useState(false);
+  const [showBankImportModal, setShowBankImportModal] = useState(false);
 
   // Focused Ledger State (Tier 2)
   const [ledgerData, setLedgerData] = useState<any>(null);
@@ -738,6 +741,16 @@ function LedgerContent() {
                   {(ledgerData.account.sop_steps?.length > 0 || Object.keys(ledgerData.account.trigger_rules || {}).length > 0) && (
                     <span className="w-2 h-2 rounded-full bg-emerald-400" />
                   )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowBankImportModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 text-xs font-bold border border-emerald-800/60 shadow-sm transition-all"
+                  title="Upload Bank Statement CSV, reconcile closing balance, and batch post"
+                >
+                  <Upload className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Import Statement</span>
                 </button>
 
                 <button
@@ -1641,6 +1654,19 @@ function LedgerContent() {
             setShowCreateLedgerModal(false);
             fetchData();
             router.push(`/ledger?accountId=${newAccount.id}`);
+          }}
+        />
+      )}
+
+      {/* Smart Bank Statement & Batch Importer Modal */}
+      {showBankImportModal && ledgerData?.account && (
+        <BankImportModal
+          isOpen={showBankImportModal}
+          onClose={() => setShowBankImportModal(false)}
+          account={ledgerData.account}
+          onSuccess={() => {
+            setShowBankImportModal(false);
+            fetchData();
           }}
         />
       )}
