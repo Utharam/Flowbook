@@ -30,7 +30,10 @@ import {
   FolderTree,
   Eye,
   EyeOff,
-  Sparkles
+  Sparkles,
+  Edit2,
+  Check,
+  ArrowUpRight
 } from 'lucide-react';
 import { AccountType, SopStep, TriggerRules } from '@/lib/db/schema';
 
@@ -59,6 +62,11 @@ function LedgerContent() {
   // View Options
   const [showNarrations, setShowNarrations] = useState(true);
   const [showForeignCurrencies, setShowForeignCurrencies] = useState(false);
+
+  // Inline Narration Edit State
+  const [editingMemoLineId, setEditingMemoLineId] = useState<string | null>(null);
+  const [editingMemoText, setEditingMemoText] = useState<string>('');
+  const [isSavingMemo, setIsSavingMemo] = useState(false);
 
   // Action & Info Hub Drawer State
   const [showDrawer, setShowDrawer] = useState(false);
@@ -157,6 +165,7 @@ function LedgerContent() {
     return ledgerData.transactions.filter((tx: any) => {
       const entryNo = (tx.entryNumber || '').toLowerCase();
       const particulars = (tx.particulars || '').toLowerCase();
+      const counterLedger = (tx.counterLedgerText || '').toLowerCase();
       const ref = (tx.reference || '').toLowerCase();
       const debitStr = tx.debit ? tx.debit.toString() : '';
       const creditStr = tx.credit ? tx.credit.toString() : '';
@@ -165,6 +174,7 @@ function LedgerContent() {
       return (
         entryNo.includes(term) ||
         particulars.includes(term) ||
+        counterLedger.includes(term) ||
         ref.includes(term) ||
         debitStr.includes(term) ||
         creditStr.includes(term) ||
@@ -229,6 +239,56 @@ function LedgerContent() {
     setAccountTags(accountTags.filter(t => t !== tagToRemove));
   };
 
+  // Inline Narration Editing Handlers
+  const startEditingMemo = (lineId: string, currentMemo: string) => {
+    setEditingMemoLineId(lineId);
+    setEditingMemoText(currentMemo || '');
+  };
+
+  const cancelEditingMemo = () => {
+    setEditingMemoLineId(null);
+    setEditingMemoText('');
+  };
+
+  const saveEditingMemo = async (entryId: string, lineId: string) => {
+    if (!activeCompanyId) return;
+    try {
+      setIsSavingMemo(true);
+      const res = await fetch('/api/ledger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'UPDATE_MEMO',
+          companyId: activeCompanyId,
+          entryId,
+          lineId,
+          memo: editingMemoText
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        // Optimistic local update
+        if (ledgerData?.transactions) {
+          const updatedTxs = ledgerData.transactions.map((tx: any) => {
+            if (tx.lineId === lineId) {
+              return { ...tx, particulars: editingMemoText, narration: editingMemoText };
+            }
+            return tx;
+          });
+          setLedgerData({ ...ledgerData, transactions: updatedTxs });
+        }
+        setEditingMemoLineId(null);
+      } else {
+        alert(`Failed: ${data.error}`);
+      }
+    } catch (err: any) {
+      alert(`Error updating narration: ${err.message}`);
+    } finally {
+      setIsSavingMemo(false);
+    }
+  };
+
   // Save Governance Metadata
   const handleSaveGovernance = async () => {
     if (!selectedAccountId || !activeCompanyId) return;
@@ -277,12 +337,13 @@ function LedgerContent() {
       [`Period: ${startDate || 'Inception'} to ${endDate || 'Present'}`],
       [`Base Currency: ${activeCompany?.base_currency}`],
       [],
-      [`Opening Balance:`, '', '', '', totals.openingBalance.toFixed(activeCompany?.decimal_places || 2), totals.openingSide],
+      [`Opening Balance:`, '', '', '', '', totals.openingBalance.toFixed(activeCompany?.decimal_places || 2), totals.openingSide],
       [],
-      ['Date', 'Voucher No', 'Particulars / Memo', 'Reference', 'Tags', 'Debit (Dr)', 'Credit (Cr)', 'Running Balance', 'Side'],
+      ['Date', 'Voucher No', 'Counter Ledger (Opposite Account)', 'Particulars / Narration', 'Reference', 'Tags', 'Debit (Dr)', 'Credit (Cr)', 'Running Balance', 'Side'],
       ...transactions.map((tx: any) => [
         tx.entryDate,
         tx.entryNumber,
+        `"${(tx.counterLedgerText || '').replace(/"/g, '""')}"`,
         `"${(tx.particulars || '').replace(/"/g, '""')}"`,
         tx.reference || '',
         (tx.tags || []).join('; '),
@@ -690,7 +751,7 @@ function LedgerContent() {
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                placeholder="Search transactions: memo, voucher #, tag, amount..."
+                placeholder="Search transactions: memo, counter ledger, voucher #, tag, amount..."
                 value={inLedgerSearch}
                 onChange={(e) => setInLedgerSearch(e.target.value)}
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
@@ -706,7 +767,7 @@ function LedgerContent() {
                   onChange={(e) => setShowNarrations(e.target.checked)}
                   className="rounded text-emerald-600 focus:ring-emerald-500"
                 />
-                <span>Show Narrations</span>
+                <span>Show Narrations & Memos</span>
               </label>
 
               <label className="flex items-center gap-2 cursor-pointer hover:text-white">
@@ -725,7 +786,7 @@ function LedgerContent() {
             </div>
           </div>
 
-          {/* Chronological Postings Grid (Immediately Visible!) */}
+          {/* Chronological Postings Grid (With Counter Ledger & Inline Narration Edit!) */}
           <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -733,11 +794,12 @@ function LedgerContent() {
                   <tr>
                     <th className="py-3 px-4 w-28">Date</th>
                     <th className="py-3 px-4 w-32">Voucher No</th>
-                    <th className="py-3 px-4">Particulars / Memo</th>
+                    <th className="py-3 px-4 w-64">Counter Ledger (Contra)</th>
+                    <th className="py-3 px-4">Particulars / Narration</th>
                     {showForeignCurrencies && <th className="py-3 px-4 text-right">Forex Amount</th>}
                     <th className="py-3 px-4">Tags (#)</th>
-                    <th className="py-3 px-4 text-right w-32">Debit (DR)</th>
-                    <th className="py-3 px-4 text-right w-32">Credit (CR)</th>
+                    <th className="py-3 px-4 text-right w-28">Debit (DR)</th>
+                    <th className="py-3 px-4 text-right w-28">Credit (CR)</th>
                     <th className="py-3 px-4 text-right w-36">Cumulative Balance</th>
                   </tr>
                 </thead>
@@ -746,6 +808,7 @@ function LedgerContent() {
                   <tr className="bg-slate-900/60 font-semibold text-slate-300">
                     <td className="py-2.5 px-4 font-mono text-slate-400">{startDate || '—'}</td>
                     <td className="py-2.5 px-4 font-mono text-slate-500">OPENING-BAL</td>
+                    <td className="py-2.5 px-4 font-mono text-slate-500 italic">Brought Forward</td>
                     <td className="py-2.5 px-4 italic text-slate-400">Opening Balance Brought Forward</td>
                     {showForeignCurrencies && <td className="py-2.5 px-4 text-right font-mono text-slate-500">—</td>}
                     <td className="py-2.5 px-4 font-mono text-slate-500">—</td>
@@ -757,73 +820,160 @@ function LedgerContent() {
                   </tr>
 
                   {/* Transaction Rows */}
-                  {filteredTransactions.map((tx: any) => (
-                    <tr key={tx.lineId} className="hover:bg-slate-850/40 transition-colors group">
-                      <td className="py-3 px-4 font-mono text-slate-300 whitespace-nowrap">
-                        {tx.entryDate}
-                      </td>
-                      <td className="py-3 px-4 font-mono font-bold text-slate-200 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5">
-                          <Link href="/vouchers" className="hover:text-emerald-400 hover:underline">
-                            {tx.entryNumber}
-                          </Link>
-                          {tx.isReversal && (
-                            <span className="px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 text-[10px] font-bold border border-rose-800/50">
-                              REV
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-slate-200">
-                        <div className="font-medium text-slate-100">{tx.particulars}</div>
-                        {showNarrations && tx.reference && (
-                          <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
-                            Ref: {tx.reference}
+                  {filteredTransactions.map((tx: any) => {
+                    const isEditingThisMemo = editingMemoLineId === tx.lineId;
+
+                    return (
+                      <tr key={tx.lineId} className="hover:bg-slate-850/40 transition-colors group">
+                        {/* 1. Date */}
+                        <td className="py-3 px-4 font-mono text-slate-300 whitespace-nowrap align-top">
+                          {tx.entryDate}
+                        </td>
+
+                        {/* 2. Voucher Number */}
+                        <td className="py-3 px-4 font-mono font-bold text-slate-200 whitespace-nowrap align-top">
+                          <div className="flex items-center gap-1.5">
+                            <Link href="/vouchers" className="hover:text-emerald-400 hover:underline">
+                              {tx.entryNumber}
+                            </Link>
+                            {tx.isReversal && (
+                              <span className="px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 text-[10px] font-bold border border-rose-800/50">
+                                REV
+                              </span>
+                            )}
                           </div>
-                        )}
-                      </td>
-                      {showForeignCurrencies && (
-                        <td className="py-3 px-4 text-right font-mono text-amber-300 whitespace-nowrap">
-                          {tx.lineCurrency !== activeCompany?.base_currency ? (
-                            <span>{tx.foreignAmount.toLocaleString()} {tx.lineCurrency}</span>
+                        </td>
+
+                        {/* 3. Counter Ledger (Contra Account) */}
+                        <td className="py-3 px-4 align-top">
+                          {tx.primaryCounterAccount ? (
+                            <Link
+                              href={`/ledger?accountId=${tx.primaryCounterAccount.id}`}
+                              className="font-semibold text-slate-200 hover:text-emerald-400 hover:underline flex items-center gap-1 group/link"
+                              title={`Drill into ${tx.counterLedgerText}`}
+                            >
+                              <span className="font-mono text-emerald-400/90">{tx.primaryCounterAccount.code}</span>
+                              <span className="truncate max-w-[180px]">{tx.primaryCounterAccount.name}</span>
+                              {tx.counterLedgers?.length > 1 && (
+                                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
+                                  +{tx.counterLedgers.length - 1} split
+                                </span>
+                              )}
+                              <ArrowUpRight className="w-3 h-3 text-slate-500 group-hover/link:text-emerald-400 opacity-0 group-hover/link:opacity-100 transition-opacity" />
+                            </Link>
                           ) : (
-                            <span className="text-slate-600">—</span>
+                            <span className="text-slate-500 font-mono italic">Direct Entry</span>
                           )}
                         </td>
-                      )}
-                      <td className="py-3 px-4">
-                        {tx.tags && tx.tags.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {tx.tags.map((t: string) => (
-                              <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
-                                {t}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-slate-600 text-[11px]">—</span>
+
+                        {/* 4. Particulars / Narration (with Inline Edit!) */}
+                        <td className="py-3 px-4 text-slate-200 align-top">
+                          {isEditingThisMemo ? (
+                            <div className="flex items-center gap-2 max-w-md animate-in fade-in duration-150">
+                              <input
+                                type="text"
+                                value={editingMemoText}
+                                onChange={(e) => setEditingMemoText(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') saveEditingMemo(tx.entryId, tx.lineId);
+                                  if (e.key === 'Escape') cancelEditingMemo();
+                                }}
+                                autoFocus
+                                className="flex-1 bg-slate-900 border border-emerald-500 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none shadow-sm"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => saveEditingMemo(tx.entryId, tx.lineId)}
+                                disabled={isSavingMemo}
+                                className="p-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white"
+                                title="Save Narration"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelEditingMemo}
+                                className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white"
+                                title="Cancel"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-start justify-between gap-2 group/memo">
+                              <div>
+                                <span className="font-medium text-slate-100">{tx.particulars}</span>
+                                {showNarrations && tx.reference && (
+                                  <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
+                                    Ref: {tx.reference}
+                                  </div>
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => startEditingMemo(tx.lineId, tx.particulars)}
+                                className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-emerald-400 rounded hover:bg-slate-800 transition-all shrink-0"
+                                title="Edit Narration / Memo"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* 5. Forex Amount */}
+                        {showForeignCurrencies && (
+                          <td className="py-3 px-4 text-right font-mono text-amber-300 whitespace-nowrap align-top">
+                            {tx.lineCurrency !== activeCompany?.base_currency ? (
+                              <span>{tx.foreignAmount.toLocaleString()} {tx.lineCurrency}</span>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
                         )}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono font-semibold text-emerald-400 whitespace-nowrap">
-                        {tx.debit > 0 ? formatAmount(tx.debit) : '—'}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono font-semibold text-sky-400 whitespace-nowrap">
-                        {tx.credit > 0 ? formatAmount(tx.credit) : '—'}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono font-bold text-slate-100 whitespace-nowrap">
-                        <span>{formatAmount(tx.runningBalance)}</span>{' '}
-                        <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
-                          tx.balanceSide === 'Dr' ? 'bg-emerald-950 text-emerald-400' : 'bg-sky-950 text-sky-400'
-                        }`}>
-                          {tx.balanceSide}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+
+                        {/* 6. Tags */}
+                        <td className="py-3 px-4 align-top">
+                          {tx.tags && tx.tags.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {tx.tags.map((t: string) => (
+                                <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-slate-600 text-[11px]">—</span>
+                          )}
+                        </td>
+
+                        {/* 7. Debit */}
+                        <td className="py-3 px-4 text-right font-mono font-semibold text-emerald-400 whitespace-nowrap align-top">
+                          {tx.debit > 0 ? formatAmount(tx.debit) : '—'}
+                        </td>
+
+                        {/* 8. Credit */}
+                        <td className="py-3 px-4 text-right font-mono font-semibold text-sky-400 whitespace-nowrap align-top">
+                          {tx.credit > 0 ? formatAmount(tx.credit) : '—'}
+                        </td>
+
+                        {/* 9. Cumulative Balance */}
+                        <td className="py-3 px-4 text-right font-mono font-bold text-slate-100 whitespace-nowrap align-top">
+                          <span>{formatAmount(tx.runningBalance)}</span>{' '}
+                          <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                            tx.balanceSide === 'Dr' ? 'bg-emerald-950 text-emerald-400' : 'bg-sky-950 text-sky-400'
+                          }`}>
+                            {tx.balanceSide}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
 
                   {filteredTransactions.length === 0 && (
                     <tr>
-                      <td colSpan={showForeignCurrencies ? 8 : 7} className="py-12 text-center text-slate-500 text-xs">
+                      <td colSpan={showForeignCurrencies ? 9 : 8} className="py-12 text-center text-slate-500 text-xs">
                         No transactions found in this period matching your search criteria.
                       </td>
                     </tr>

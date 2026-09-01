@@ -48,7 +48,6 @@ export async function GET(req: Request) {
           signedTotal += line.amount;
         }
 
-        // Display balance according to account normal sign
         const isDebitNormal = acc.type === 'ASSET' || acc.type === 'EXPENSE';
         const displayBalance = isDebitNormal ? Math.abs(debitTotal - creditTotal) : Math.abs(creditTotal - debitTotal);
         const normalSide = isDebitNormal
@@ -97,7 +96,6 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: false, error: 'Account not found' }, { status: 404 });
     }
 
-    // Parse governance fields
     let parsedTags: string[] = [];
     let parsedSops: any[] = [];
     let parsedTriggers: any = {};
@@ -181,7 +179,7 @@ export async function GET(req: Request) {
         })
       : rows;
 
-    // 2.3. Compute Period Totals & Chronological Running Balance
+    // 2.3. Compute Counter Ledgers & Chronological Running Balance
     let runningBalance = openingBalance;
     let periodDebits = 0;
     let periodCredits = 0;
@@ -207,13 +205,36 @@ export async function GET(req: Request) {
         parsedLineTags = JSON.parse(row.line_tags || '[]');
       } catch {}
 
+      // Find Counter Ledgers (Other accounts on this voucher)
+      const otherLines = db.prepare(`
+        SELECT a.id, a.code, a.name, a.type, jl.amount
+        FROM journal_lines jl
+        JOIN accounts a ON jl.account_id = a.id
+        WHERE jl.entry_id = ? AND jl.account_id != ?
+      `).all(row.entry_id, accountId) as Array<{ id: string; code: string; name: string; type: string; amount: number }>;
+
+      let counterLedgerText = '—';
+      let primaryCounterAccount: any = null;
+
+      if (otherLines.length === 1) {
+        primaryCounterAccount = otherLines[0];
+        counterLedgerText = `${otherLines[0].code} - ${otherLines[0].name}`;
+      } else if (otherLines.length > 1) {
+        primaryCounterAccount = otherLines[0];
+        counterLedgerText = `${otherLines[0].code} - ${otherLines[0].name} (+${otherLines.length - 1} split)`;
+      }
+
       return {
         lineId: row.line_id,
         entryId: row.entry_id,
         entryNumber: row.entry_number,
         entryDate: row.entry_date,
         particulars: row.line_memo || row.entry_memo || 'General Journal Entry',
+        narration: row.line_memo || row.entry_memo || '',
         reference: row.reference || '',
+        counterLedgerText,
+        counterLedgers: otherLines,
+        primaryCounterAccount,
         isReversal: row.is_reversal === 1,
         createdBy: row.created_by,
         lineCurrency: row.line_currency,
@@ -263,8 +284,31 @@ export async function POST(req: Request) {
   try {
     const db = getDb();
     const body = await req.json();
-    const { action, companyId, accountId, tags, description, sop_steps, trigger_rules } = body;
+    const { action, companyId, accountId, entryId, lineId, memo, tags, description, sop_steps, trigger_rules } = body;
 
+    // 1. UPDATE NARRATION / MEMO DIRECTLY FROM LEDGER
+    if (action === 'UPDATE_MEMO' && (entryId || lineId)) {
+      if (lineId) {
+        db.prepare(`UPDATE journal_lines SET memo = ? WHERE id = ?`).run(memo || null, lineId);
+      }
+      if (entryId) {
+        db.prepare(`UPDATE journal_entries SET memo = ? WHERE id = ?`).run(memo || null, entryId);
+      }
+
+      logAuditEvent(
+        companyId || 'cmp_utharam_global',
+        'VOUCHER_POSTED',
+        'Accountant',
+        `Edited narration/memo for voucher entry #${entryId || lineId}: "${memo || ''}"`
+      );
+
+      return NextResponse.json({
+        success: true,
+        message: 'Narration updated successfully.'
+      });
+    }
+
+    // 2. UPDATE GOVERNANCE METADATA
     if (action === 'UPDATE_GOVERNANCE' && accountId) {
       const tagsStr = JSON.stringify(tags || []);
       const sopsStr = JSON.stringify(sop_steps || []);
