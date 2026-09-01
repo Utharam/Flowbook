@@ -22,7 +22,8 @@ export type AuditEventType =
   | 'BACKUP_GENERATED' 
   | 'BACKUP_RESTORED'
   | 'OFFICER_ALTERED'
-  | 'CAP_TABLE_ALTERED';
+  | 'CAP_TABLE_ALTERED'
+  | 'LEDGER_GOVERNANCE_UPDATED';
 
 export interface Company {
   id: string;
@@ -66,6 +67,18 @@ export interface ShareholdingStructure {
   created_at: string;
 }
 
+export interface SopStep {
+  step_number: number;
+  title: string;
+  instruction: string;
+}
+
+export interface TriggerRules {
+  min_monthly_transactions?: number;
+  max_single_transaction_limit?: number;
+  alert_on_unusual_variance?: boolean;
+}
+
 export interface Account {
   id: string;
   company_id: string;
@@ -77,6 +90,9 @@ export interface Account {
   is_group: number; // 1 = Group/Folder, 0 = Posting Account
   currency?: string;
   description?: string;
+  tags?: string[];
+  sop_steps?: SopStep[];
+  trigger_rules?: TriggerRules;
   is_active: number;
   created_at: string;
 }

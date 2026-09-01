@@ -101,6 +101,9 @@ function initSchemaAndSeed(db: DatabaseSync) {
       is_group INTEGER NOT NULL DEFAULT 0,
       currency TEXT,
       description TEXT,
+      tags TEXT NOT NULL DEFAULT '[]',
+      sop_steps TEXT NOT NULL DEFAULT '[]',
+      trigger_rules TEXT NOT NULL DEFAULT '{}',
       is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
     );
@@ -195,10 +198,11 @@ function initSchemaAndSeed(db: DatabaseSync) {
     );
   `);
 
-  // Run schema additions for registered_address if not present
-  try {
-    db.exec(`ALTER TABLE companies ADD COLUMN registered_address TEXT;`);
-  } catch {}
+  // Safe migrations for existing SQLite database
+  try { db.exec(`ALTER TABLE companies ADD COLUMN registered_address TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE accounts ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';`); } catch {}
+  try { db.exec(`ALTER TABLE accounts ADD COLUMN sop_steps TEXT NOT NULL DEFAULT '[]';`); } catch {}
+  try { db.exec(`ALTER TABLE accounts ADD COLUMN trigger_rules TEXT NOT NULL DEFAULT '{}';`); } catch {}
 
   seedInitialData(db);
 }
@@ -207,6 +211,7 @@ function seedInitialData(db: DatabaseSync) {
   const companyCheck = db.prepare('SELECT COUNT(*) as count FROM companies').get() as { count: number };
   if (companyCheck && companyCheck.count > 0) {
     upgradeTemplatesIfLegacy(db);
+    seedDefaultSopsIfMissing(db);
     return;
   }
 
@@ -268,45 +273,45 @@ function seedInitialData(db: DatabaseSync) {
 
     // Asset Sub-groups & Accounts
     { id: 'acc_1100', code: '1100', name: 'Current Assets', type: 'ASSET', parent_id: 'acc_1000', path: '1000.1100', is_group: 1 },
-    { id: 'acc_1110', code: '1110', name: 'Cash & Operating Bank Account', type: 'ASSET', parent_id: 'acc_1100', path: '1000.1100.1110', is_group: 0, currency: 'USD' },
-    { id: 'acc_1120', code: '1120', name: 'Treasury & FX Liquidity (EUR)', type: 'ASSET', parent_id: 'acc_1100', path: '1000.1100.1120', is_group: 0, currency: 'EUR' },
-    { id: 'acc_1130', code: '1130', name: 'Accounts Receivable (Trade Debtors)', type: 'ASSET', parent_id: 'acc_1100', path: '1000.1100.1130', is_group: 0, currency: 'USD' },
-    { id: 'acc_1140', code: '1140', name: 'Intercompany Receivable (Utharam MEA)', type: 'ASSET', parent_id: 'acc_1100', path: '1000.1100.1140', is_group: 0, currency: 'USD' },
+    { id: 'acc_1110', code: '1110', name: 'Cash & Operating Bank Account', type: 'ASSET', parent_id: 'acc_1100', path: '1000.1100.1110', is_group: 0, currency: 'USD', tags: '["#Bank", "#Treasury"]' },
+    { id: 'acc_1120', code: '1120', name: 'Treasury & FX Liquidity (EUR)', type: 'ASSET', parent_id: 'acc_1100', path: '1000.1100.1120', is_group: 0, currency: 'EUR', tags: '["#Treasury", "#EUR"]' },
+    { id: 'acc_1130', code: '1130', name: 'Accounts Receivable (Trade Debtors)', type: 'ASSET', parent_id: 'acc_1100', path: '1000.1100.1130', is_group: 0, currency: 'USD', tags: '["#AR", "#Customers"]' },
+    { id: 'acc_1140', code: '1140', name: 'Intercompany Receivable (Utharam MEA)', type: 'ASSET', parent_id: 'acc_1100', path: '1000.1100.1140', is_group: 0, currency: 'USD', tags: '["#Intercompany"]' },
 
     // Fixed Assets Cluster
     { id: 'acc_1500', code: '1500', name: 'Fixed Assets', type: 'ASSET', parent_id: 'acc_1000', path: '1000.1500', is_group: 1 },
-    { id: 'acc_1510', code: '1510', name: 'Commercial Property Unit #1206', type: 'ASSET', parent_id: 'acc_1500', path: '1000.1500.1510', is_group: 0, currency: 'USD' },
-    { id: 'acc_1520', code: '1520', name: 'Accumulated Depreciation - Unit #1206', type: 'ASSET', parent_id: 'acc_1500', path: '1000.1500.1520', is_group: 0, currency: 'USD' },
+    { id: 'acc_1510', code: '1510', name: 'Commercial Property Unit #1206', type: 'ASSET', parent_id: 'acc_1500', path: '1000.1500.1510', is_group: 0, currency: 'USD', tags: '["#1206", "#RealEstate"]' },
+    { id: 'acc_1520', code: '1520', name: 'Accumulated Depreciation - Unit #1206', type: 'ASSET', parent_id: 'acc_1500', path: '1000.1500.1520', is_group: 0, currency: 'USD', tags: '["#1206", "#Depreciation"]' },
 
     // Liabilities
     { id: 'acc_2100', code: '2100', name: 'Current Liabilities', type: 'LIABILITY', parent_id: 'acc_2000', path: '2000.2100', is_group: 1 },
-    { id: 'acc_2110', code: '2110', name: 'Accounts Payable (Trade Creditors)', type: 'LIABILITY', parent_id: 'acc_2100', path: '2000.2100.2110', is_group: 0, currency: 'USD' },
-    { id: 'acc_2120', code: '2120', name: 'Accrued Payroll & Taxes', type: 'LIABILITY', parent_id: 'acc_2100', path: '2000.2100.2120', is_group: 0, currency: 'USD' },
-    { id: 'acc_2130', code: '2130', name: 'Intercompany Payable (Utharam MEA)', type: 'LIABILITY', parent_id: 'acc_2100', path: '2000.2100.2130', is_group: 0, currency: 'USD' },
+    { id: 'acc_2110', code: '2110', name: 'Accounts Payable (Trade Creditors)', type: 'LIABILITY', parent_id: 'acc_2100', path: '2000.2100.2110', is_group: 0, currency: 'USD', tags: '["#AP", "#Vendors"]' },
+    { id: 'acc_2120', code: '2120', name: 'Accrued Payroll & Taxes', type: 'LIABILITY', parent_id: 'acc_2100', path: '2000.2100.2120', is_group: 0, currency: 'USD', tags: '["#Payroll"]' },
+    { id: 'acc_2130', code: '2130', name: 'Intercompany Payable (Utharam MEA)', type: 'LIABILITY', parent_id: 'acc_2100', path: '2000.2100.2130', is_group: 0, currency: 'USD', tags: '["#Intercompany"]' },
 
     // Equity
-    { id: 'acc_3100', code: '3100', name: 'Common Share Capital', type: 'EQUITY', parent_id: 'acc_3000', path: '3000.3100', is_group: 0, currency: 'USD' },
+    { id: 'acc_3100', code: '3100', name: 'Common Share Capital', type: 'EQUITY', parent_id: 'acc_3000', path: '3000.3100', is_group: 0, currency: 'USD', tags: '["#Capital"]' },
     { id: 'acc_3200', code: '3200', name: 'Retained Earnings', type: 'EQUITY', parent_id: 'acc_3000', path: '3000.3200', is_group: 0, currency: 'USD' },
 
     // Revenue
-    { id: 'acc_4100', code: '4100', name: 'Enterprise SaaS & Subscription Revenue', type: 'REVENUE', parent_id: 'acc_4000', path: '4000.4100', is_group: 0, currency: 'USD' },
-    { id: 'acc_4200', code: '4200', name: 'Commercial Property Rental Income (#1206)', type: 'REVENUE', parent_id: 'acc_4000', path: '4000.4200', is_group: 0, currency: 'USD' },
-    { id: 'acc_4900', code: '4900', name: 'Realized FX Gain / Loss', type: 'REVENUE', parent_id: 'acc_4000', path: '4000.4900', is_group: 0, currency: 'USD' },
+    { id: 'acc_4100', code: '4100', name: 'Enterprise SaaS & Subscription Revenue', type: 'REVENUE', parent_id: 'acc_4000', path: '4000.4100', is_group: 0, currency: 'USD', tags: '["#SaaS", "#Revenue"]' },
+    { id: 'acc_4200', code: '4200', name: 'Commercial Property Rental Income (#1206)', type: 'REVENUE', parent_id: 'acc_4000', path: '4000.4200', is_group: 0, currency: 'USD', tags: '["#1206", "#Rental"]' },
+    { id: 'acc_4900', code: '4900', name: 'Realized FX Gain / Loss', type: 'REVENUE', parent_id: 'acc_4000', path: '4000.4900', is_group: 0, currency: 'USD', tags: '["#FX"]' },
 
     // Expenses
-    { id: 'acc_5100', code: '5100', name: 'Salaries & Staff Costs', type: 'EXPENSE', parent_id: 'acc_5000', path: '5000.5100', is_group: 0, currency: 'USD' },
-    { id: 'acc_5200', code: '5200', name: 'Office Rent & Facilities', type: 'EXPENSE', parent_id: 'acc_5000', path: '5000.5200', is_group: 0, currency: 'USD' },
-    { id: 'acc_5300', code: '5300', name: 'Unit #1206 Maintenance & Utilities', type: 'EXPENSE', parent_id: 'acc_5000', path: '5000.5300', is_group: 0, currency: 'USD' },
-    { id: 'acc_5400', code: '5400', name: 'Cloud Server Infrastructure', type: 'EXPENSE', parent_id: 'acc_5000', path: '5000.5400', is_group: 0, currency: 'USD' },
-    { id: 'acc_5500', code: '5500', name: 'Depreciation Expense - Real Estate', type: 'EXPENSE', parent_id: 'acc_5000', path: '5000.5500', is_group: 0, currency: 'USD' },
+    { id: 'acc_5100', code: '5100', name: 'Salaries & Staff Costs', type: 'EXPENSE', parent_id: 'acc_5000', path: '5000.5100', is_group: 0, currency: 'USD', tags: '["#Payroll", "#HR"]' },
+    { id: 'acc_5200', code: '5200', name: 'Office Rent & Facilities', type: 'EXPENSE', parent_id: 'acc_5000', path: '5000.5200', is_group: 0, currency: 'USD', tags: '["#HQ", "#Rent"]' },
+    { id: 'acc_5300', code: '5300', name: 'Unit #1206 Maintenance & Utilities', type: 'EXPENSE', parent_id: 'acc_5000', path: '5000.5300', is_group: 0, currency: 'USD', tags: '["#1206", "#Maintenance"]' },
+    { id: 'acc_5400', code: '5400', name: 'Cloud Server Infrastructure', type: 'EXPENSE', parent_id: 'acc_5000', path: '5000.5400', is_group: 0, currency: 'USD', tags: '["#AWS", "#Infrastructure"]' },
+    { id: 'acc_5500', code: '5500', name: 'Depreciation Expense - Real Estate', type: 'EXPENSE', parent_id: 'acc_5000', path: '5000.5500', is_group: 0, currency: 'USD', tags: '["#Depreciation"]' },
   ];
 
   const insertCoa = db.prepare(`
-    INSERT INTO accounts (id, company_id, code, name, type, parent_id, path, is_group, currency, is_active, created_at)
-    VALUES (?, 'cmp_utharam_global', ?, ?, ?, ?, ?, ?, ?, 1, ?)
+    INSERT INTO accounts (id, company_id, code, name, type, parent_id, path, is_group, currency, tags, is_active, created_at)
+    VALUES (?, 'cmp_utharam_global', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
   `);
   for (const acc of coaData) {
-    insertCoa.run(acc.id, acc.code, acc.name, acc.type, acc.parent_id, acc.path, acc.is_group, acc.currency || 'USD', now);
+    insertCoa.run(acc.id, acc.code, acc.name, acc.type, acc.parent_id, acc.path, acc.is_group, acc.currency || 'USD', acc.tags || '[]', now);
   }
 
   // 6. Seed Multi-Step Flow Templates
@@ -328,8 +333,52 @@ function seedInitialData(db: DatabaseSync) {
   // 8. Seed Initial Opening Balances & Sample Multi-Currency Transactions
   seedSampleJournalEntries(db, now);
 
-  // 9. Log Initial Audit Event
+  // 9. Seed Default SOPs and Trigger Rules
+  seedDefaultSopsIfMissing(db);
+
+  // 10. Log Initial Audit Event
   logAuditEvent('cmp_utharam_global', 'COMPANY_CREATED', 'System Seeder', 'Initialized Utharam Enterprises Private Limited corporate books');
+}
+
+function seedDefaultSopsIfMissing(db: DatabaseSync) {
+  try {
+    // 1. SOP for Office Rent (acc_5200)
+    db.prepare(`
+      UPDATE accounts SET 
+        sop_steps = ?,
+        trigger_rules = ?
+      WHERE id = 'acc_5200' AND (sop_steps = '[]' OR sop_steps IS NULL)
+    `).run(
+      JSON.stringify([
+        { step_number: 1, title: 'Verify Lease Agreement', instruction: 'Confirm monthly rent matches the current signed lease terms and landlord tax ID.' },
+        { step_number: 2, title: 'TDS / Withholding Tax', instruction: 'Ensure TDS Section 194-I (10%) or applicable local withholding is deducted before bank release.' },
+        { step_number: 3, title: 'Landlord Receipt Acknowledgment', instruction: 'Collect and archive the official rent receipt in the document vault.' }
+      ]),
+      JSON.stringify({
+        min_monthly_transactions: 1,
+        max_single_transaction_limit: 10000,
+        alert_on_unusual_variance: true
+      })
+    );
+
+    // 2. SOP for Unit #1206 Maintenance (acc_5300)
+    db.prepare(`
+      UPDATE accounts SET 
+        sop_steps = ?,
+        trigger_rules = ?
+      WHERE id = 'acc_5300' AND (sop_steps = '[]' OR sop_steps IS NULL)
+    `).run(
+      JSON.stringify([
+        { step_number: 1, title: 'Collect Service Work Order', instruction: 'Verify technician work completion certificate and vendor tax invoice.' },
+        { step_number: 2, title: 'Tag Assignment (#1206)', instruction: 'Confirm the voucher line item is strictly tagged with #1206 for asset clustering.' },
+        { step_number: 3, title: 'Property Manager Sign-Off', instruction: 'Obtain approval from the facilities manager before posting payment.' }
+      ]),
+      JSON.stringify({
+        max_single_transaction_limit: 5000,
+        alert_on_unusual_variance: true
+      })
+    );
+  } catch {}
 }
 
 function seedMultiStepTemplates(db: DatabaseSync, now: string) {

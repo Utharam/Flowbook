@@ -1,87 +1,108 @@
 'use client';
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, useEffect, useMemo, Suspense } from 'react';
+import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useCompany } from '@/components/context/company-context';
+import { CreateLedgerModal } from '@/components/accounts/create-ledger-modal';
 import { 
   BookOpen, 
   Search, 
   Calendar, 
   Download, 
   Printer, 
-  Tag, 
-  Plus, 
-  Filter, 
-  TrendingUp, 
-  TrendingDown, 
-  Building, 
+  PlusCircle, 
+  FileText, 
+  ArrowLeft, 
+  Settings, 
+  Layers, 
+  Clock, 
+  AlertCircle, 
   CheckCircle2, 
-  RotateCcw, 
-  FileText,
-  ChevronDown
+  Tag, 
+  Coins, 
+  SlidersHorizontal,
+  ChevronRight,
+  Plus,
+  Trash2,
+  X,
+  Building2,
+  FolderTree,
+  Eye,
+  EyeOff,
+  Sparkles
 } from 'lucide-react';
-import Link from 'next/link';
+import { AccountType, SopStep, TriggerRules } from '@/lib/db/schema';
 
-function LedgerViewerContent() {
-  const router = useRouter();
+function LedgerContent() {
   const searchParams = useSearchParams();
-  const initialAccountId = searchParams.get('accountId') || '';
-
+  const router = useRouter();
   const { activeCompany, activeCompanyId, formatAmount } = useCompany();
-  const [accounts, setAccounts] = useState<any[]>([]);
-  const [selectedAccountId, setSelectedAccountId] = useState<string>(initialAccountId);
-  const [accountSearch, setAccountSearch] = useState<string>('');
-  const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
 
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
-  const [selectedTag, setSelectedTag] = useState<string>('');
+  const selectedAccountId = searchParams.get('accountId');
 
+  // Directory State (Tier 1)
+  const [directoryAccounts, setDirectoryAccounts] = useState<any[]>([]);
+  const [directorySearch, setDirectorySearch] = useState('');
+  const [directoryCategoryFilter, setDirectoryCategoryFilter] = useState<string>('ALL');
+  const [showCreateLedgerModal, setShowCreateLedgerModal] = useState(false);
+
+  // Focused Ledger State (Tier 2)
   const [ledgerData, setLedgerData] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [inLedgerSearch, setInLedgerSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [selectedTag, setSelectedTag] = useState('');
+  const [activePreset, setActivePreset] = useState<'ALL' | 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_FY'>('ALL');
+  const [isLoading, setIsLoading] = useState(true);
 
-  // 1. Fetch posting accounts for selector
-  useEffect(() => {
+  // View Options
+  const [showNarrations, setShowNarrations] = useState(true);
+  const [showForeignCurrencies, setShowForeignCurrencies] = useState(false);
+
+  // Action & Info Hub Drawer State
+  const [showDrawer, setShowDrawer] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<'SOP' | 'TRIGGERS' | 'TAGS' | 'VIEW'>('SOP');
+  const [isSavingGovernance, setIsSavingGovernance] = useState(false);
+  const [drawerSuccessMsg, setDrawerSuccessMsg] = useState<string | null>(null);
+
+  // Drawer Form States
+  const [sopSteps, setSopSteps] = useState<SopStep[]>([]);
+  const [triggerRules, setTriggerRules] = useState<TriggerRules>({});
+  const [accountTags, setAccountTags] = useState<string[]>([]);
+  const [accountDescription, setAccountDescription] = useState('');
+  const [newTagInput, setNewTagInput] = useState('');
+
+  // 1. Fetch Directory or Focused Ledger Data
+  const fetchData = async () => {
     if (!activeCompanyId) return;
-    const loadAccounts = async () => {
-      try {
-        const res = await fetch(`/api/accounts?companyId=${activeCompanyId}`);
-        const data = await res.json();
-        if (data.success) {
-          const postingAccounts = data.accounts.filter((a: any) => a.is_group === 0);
-          setAccounts(postingAccounts);
-          if (!selectedAccountId && postingAccounts.length > 0) {
-            setSelectedAccountId(postingAccounts[0].id);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to fetch accounts list:', err);
-      }
-    };
-    loadAccounts();
-  }, [activeCompanyId]);
-
-  // Update selected account if query param changes
-  useEffect(() => {
-    if (initialAccountId) {
-      setSelectedAccountId(initialAccountId);
-    }
-  }, [initialAccountId]);
-
-  // 2. Fetch ledger transactions & running balances
-  const fetchLedger = async () => {
-    if (!activeCompanyId || !selectedAccountId) return;
     try {
       setIsLoading(true);
-      let url = `/api/ledger?companyId=${activeCompanyId}&accountId=${selectedAccountId}`;
-      if (startDate) url += `&startDate=${startDate}`;
-      if (endDate) url += `&endDate=${endDate}`;
-      if (selectedTag) url += `&tag=${encodeURIComponent(selectedTag)}`;
+      if (!selectedAccountId) {
+        // Fetch Directory
+        const res = await fetch(`/api/ledger?companyId=${activeCompanyId}`);
+        const data = await res.json();
+        if (data.success) {
+          setDirectoryAccounts(data.accounts || []);
+          setLedgerData(null);
+        }
+      } else {
+        // Fetch Focused Ledger
+        let url = `/api/ledger?companyId=${activeCompanyId}&accountId=${selectedAccountId}`;
+        if (startDate) url += `&startDate=${startDate}`;
+        if (endDate) url += `&endDate=${endDate}`;
+        if (selectedTag) url += `&tag=${encodeURIComponent(selectedTag)}`;
 
-      const res = await fetch(url);
-      const json = await res.json();
-      if (json.success) {
-        setLedgerData(json);
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.success) {
+          setLedgerData(data);
+          // Initialize drawer fields
+          setSopSteps(data.account?.sop_steps || []);
+          setTriggerRules(data.account?.trigger_rules || {});
+          setAccountTags(data.account?.tags || []);
+          setAccountDescription(data.account?.description || '');
+        }
       }
     } catch (err) {
       console.error('Failed to load ledger data:', err);
@@ -91,500 +112,1064 @@ function LedgerViewerContent() {
   };
 
   useEffect(() => {
-    fetchLedger();
+    fetchData();
   }, [activeCompanyId, selectedAccountId, startDate, endDate, selectedTag]);
 
-  // Preset Date Range Helpers
-  const applyPreset = (preset: 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_FY' | 'ALL_TIME') => {
+  // Date Preset Handlers
+  const handleApplyPreset = (preset: 'ALL' | 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_FY') => {
+    setActivePreset(preset);
     const now = new Date();
     const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth() + 1;
+    const currentMonth = now.getMonth();
 
-    if (preset === 'ALL_TIME') {
+    if (preset === 'ALL') {
       setStartDate('');
       setEndDate('');
     } else if (preset === 'THIS_MONTH') {
-      const start = new Date(currentYear, currentMonth - 1, 1).toISOString().substring(0, 10);
-      const end = new Date(currentYear, currentMonth, 0).toISOString().substring(0, 10);
-      setStartDate(start);
-      setEndDate(end);
+      const firstDay = new Date(currentYear, currentMonth, 1).toISOString().substring(0, 10);
+      const lastDay = new Date(currentYear, currentMonth + 1, 0).toISOString().substring(0, 10);
+      setStartDate(firstDay);
+      setEndDate(lastDay);
     } else if (preset === 'LAST_MONTH') {
-      const start = new Date(currentYear, currentMonth - 2, 1).toISOString().substring(0, 10);
-      const end = new Date(currentYear, currentMonth - 1, 0).toISOString().substring(0, 10);
-      setStartDate(start);
-      setEndDate(end);
+      const firstDay = new Date(currentYear, currentMonth - 1, 1).toISOString().substring(0, 10);
+      const lastDay = new Date(currentYear, currentMonth, 0).toISOString().substring(0, 10);
+      setStartDate(firstDay);
+      setEndDate(lastDay);
     } else if (preset === 'THIS_FY') {
-      const fyMonth = activeCompany?.financial_year_start_month || 4;
-      let fyStartYear = currentYear;
-      if (currentMonth < fyMonth) {
-        fyStartYear = currentYear - 1;
+      const fyStartMonth = (activeCompany?.financial_year_start_month || 4) - 1;
+      let fyYear = currentYear;
+      if (currentMonth < fyStartMonth) {
+        fyYear -= 1;
       }
-      const start = `${fyStartYear}-${String(fyMonth).padStart(2, '0')}-01`;
-      setStartDate(start);
-      setEndDate('');
+      const firstDay = new Date(fyYear, fyStartMonth, 1).toISOString().substring(0, 10);
+      const lastDay = new Date(fyYear + 1, fyStartMonth, 0).toISOString().substring(0, 10);
+      setStartDate(firstDay);
+      setEndDate(lastDay);
     }
   };
 
-  const exportCSV = () => {
-    if (!ledgerData) return;
-    const acc = ledgerData.account;
-    const sum = ledgerData.summary;
+  // Filtered Transactions for In-Ledger Search
+  const filteredTransactions = useMemo(() => {
+    if (!ledgerData?.transactions) return [];
+    if (!inLedgerSearch.trim()) return ledgerData.transactions;
+
+    const term = inLedgerSearch.toLowerCase();
+    return ledgerData.transactions.filter((tx: any) => {
+      const entryNo = (tx.entryNumber || '').toLowerCase();
+      const particulars = (tx.particulars || '').toLowerCase();
+      const ref = (tx.reference || '').toLowerCase();
+      const debitStr = tx.debit ? tx.debit.toString() : '';
+      const creditStr = tx.credit ? tx.credit.toString() : '';
+      const tagsStr = (tx.tags || []).join(' ').toLowerCase();
+
+      return (
+        entryNo.includes(term) ||
+        particulars.includes(term) ||
+        ref.includes(term) ||
+        debitStr.includes(term) ||
+        creditStr.includes(term) ||
+        tagsStr.includes(term)
+      );
+    });
+  }, [ledgerData, inLedgerSearch]);
+
+  // Filtered Directory Accounts
+  const filteredDirectoryAccounts = useMemo(() => {
+    return directoryAccounts.filter(acc => {
+      if (acc.is_group === 1) return false; // Show leaf posting accounts in directory
+      if (directoryCategoryFilter !== 'ALL' && acc.type !== directoryCategoryFilter) return false;
+      if (!directorySearch.trim()) return true;
+
+      const term = directorySearch.toLowerCase();
+      const code = (acc.code || '').toLowerCase();
+      const name = (acc.name || '').toLowerCase();
+      const path = (acc.path || '').toLowerCase();
+      const tags = (acc.tags || []).join(' ').toLowerCase();
+
+      return code.includes(term) || name.includes(term) || path.includes(term) || tags.includes(term);
+    });
+  }, [directoryAccounts, directorySearch, directoryCategoryFilter]);
+
+  // SOP Step Handlers
+  const handleAddSopStep = () => {
+    setSopSteps([
+      ...sopSteps,
+      {
+        step_number: sopSteps.length + 1,
+        title: `Step ${sopSteps.length + 1}`,
+        instruction: ''
+      }
+    ]);
+  };
+
+  const handleUpdateSopStep = (index: number, field: 'title' | 'instruction', val: string) => {
+    const updated = [...sopSteps];
+    updated[index] = { ...updated[index], [field]: val };
+    setSopSteps(updated);
+  };
+
+  const handleDeleteSopStep = (index: number) => {
+    const updated = sopSteps.filter((_, i) => i !== index).map((s, i) => ({ ...s, step_number: i + 1 }));
+    setSopSteps(updated);
+  };
+
+  // Tag Handlers
+  const handleAddTag = (e: React.KeyboardEvent | React.MouseEvent) => {
+    if (newTagInput.trim()) {
+      let tagFormatted = newTagInput.trim();
+      if (!tagFormatted.startsWith('#')) tagFormatted = `#${tagFormatted}`;
+      if (!accountTags.includes(tagFormatted)) {
+        setAccountTags([...accountTags, tagFormatted]);
+      }
+      setNewTagInput('');
+    }
+  };
+
+  const handleRemoveTag = (tagToRemove: string) => {
+    setAccountTags(accountTags.filter(t => t !== tagToRemove));
+  };
+
+  // Save Governance Metadata
+  const handleSaveGovernance = async () => {
+    if (!selectedAccountId || !activeCompanyId) return;
+    try {
+      setIsSavingGovernance(true);
+      setDrawerSuccessMsg(null);
+
+      const res = await fetch('/api/ledger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'UPDATE_GOVERNANCE',
+          companyId: activeCompanyId,
+          accountId: selectedAccountId,
+          description: accountDescription,
+          tags: accountTags,
+          sop_steps: sopSteps,
+          trigger_rules: triggerRules
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setDrawerSuccessMsg('Governance parameters & SOP updated successfully!');
+        fetchData();
+        setTimeout(() => setDrawerSuccessMsg(null), 3500);
+      } else {
+        alert(`Failed: ${data.error}`);
+      }
+    } catch (err: any) {
+      alert(`Error saving governance: ${err.message}`);
+    } finally {
+      setIsSavingGovernance(false);
+    }
+  };
+
+  // Export CSV
+  const handleExportCSV = () => {
+    if (!ledgerData || !ledgerData.account) return;
+    const { account, totals, transactions } = ledgerData;
 
     const rows = [
       [`Flowbook by Utharam - General Ledger Statement`],
       [`Entity: ${activeCompany?.legal_name}`],
-      [`Account: ${acc.code} - ${acc.name} (${acc.type})`],
+      [`Account: ${account.code} - ${account.name}`],
       [`Period: ${startDate || 'Inception'} to ${endDate || 'Present'}`],
       [`Base Currency: ${activeCompany?.base_currency}`],
       [],
-      ['Date', 'Voucher #', 'Particulars / Memo', 'Reference', 'Tags', 'Debit (Dr)', 'Credit (Cr)', 'Running Balance', 'Dr/Cr'],
-      ['', 'OPENING', 'Opening Balance Forward', '', '', '', '', Math.abs(sum.openingDisplayBalance).toFixed(activeCompany?.decimal_places || 2), sum.openingBalanceType],
-      ...ledgerData.transactions.map((tx: any) => [
-        tx.entry_date,
-        tx.entry_number,
+      [`Opening Balance:`, '', '', '', totals.openingBalance.toFixed(activeCompany?.decimal_places || 2), totals.openingSide],
+      [],
+      ['Date', 'Voucher No', 'Particulars / Memo', 'Reference', 'Tags', 'Debit (Dr)', 'Credit (Cr)', 'Running Balance', 'Side'],
+      ...transactions.map((tx: any) => [
+        tx.entryDate,
+        tx.entryNumber,
         `"${(tx.particulars || '').replace(/"/g, '""')}"`,
         tx.reference || '',
-        `"${(tx.tags || []).join(' ')}"`,
+        (tx.tags || []).join('; '),
         tx.debit > 0 ? tx.debit.toFixed(activeCompany?.decimal_places || 2) : '',
         tx.credit > 0 ? tx.credit.toFixed(activeCompany?.decimal_places || 2) : '',
-        Math.abs(tx.running_display_balance).toFixed(activeCompany?.decimal_places || 2),
-        tx.running_balance_type
+        tx.runningBalance.toFixed(activeCompany?.decimal_places || 2),
+        tx.balanceSide
       ]),
-      ['', 'CLOSING', 'Closing Balance', '', '', sum.periodDebitTotal.toFixed(activeCompany?.decimal_places || 2), sum.periodCreditTotal.toFixed(activeCompany?.decimal_places || 2), Math.abs(sum.closingDisplayBalance).toFixed(activeCompany?.decimal_places || 2), sum.closingBalanceType]
+      [],
+      ['Total Period Debits:', totals.periodDebits.toFixed(activeCompany?.decimal_places || 2)],
+      ['Total Period Credits:', totals.periodCredits.toFixed(activeCompany?.decimal_places || 2)],
+      ['Net Period Movement:', totals.netMovement.toFixed(activeCompany?.decimal_places || 2)],
+      ['Period Closing Balance:', totals.closingBalance.toFixed(activeCompany?.decimal_places || 2), totals.closingSide]
     ];
 
     const csvContent = 'data:text/csv;charset=utf-8,' + rows.map(e => e.join(',')).join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Ledger_${acc.code}_${acc.name.replace(/\s+/g, '_')}_${new Date().toISOString().substring(0,10)}.csv`);
+    link.setAttribute('download', `Ledger_${account.code}_${new Date().toISOString().substring(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  const filteredAccountOptions = accounts.filter(a => {
-    if (!accountSearch) return true;
-    const term = accountSearch.toLowerCase();
-    return a.code.toLowerCase().includes(term) || a.name.toLowerCase().includes(term) || a.type.toLowerCase().includes(term);
-  });
-
-  const currentAccount = accounts.find(a => a.id === selectedAccountId) || ledgerData?.account || null;
-  const summary = ledgerData?.summary || {
-    openingDisplayBalance: 0,
-    openingBalanceType: '-',
-    periodDebitTotal: 0,
-    periodCreditTotal: 0,
-    periodNetMovement: 0,
-    closingDisplayBalance: 0,
-    closingBalanceType: '-'
+  // Helper for Category Colors
+  const getCategoryBadge = (type: AccountType) => {
+    switch (type) {
+      case 'ASSET': return 'bg-emerald-950/80 text-emerald-400 border-emerald-800/60';
+      case 'LIABILITY': return 'bg-sky-950/80 text-sky-400 border-sky-800/60';
+      case 'EQUITY': return 'bg-indigo-950/80 text-indigo-400 border-indigo-800/60';
+      case 'REVENUE': return 'bg-teal-950/80 text-teal-400 border-teal-800/60';
+      case 'EXPENSE': return 'bg-amber-950/80 text-amber-400 border-amber-800/60';
+      default: return 'bg-slate-800 text-slate-300 border-slate-700';
+    }
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 no-print">
-        <div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-1">
-            <BookOpen className="w-4 h-4" />
-            <span>Account Statement & General Ledger</span>
-          </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">
-            Account Ledger Viewer
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">
-            Examine transaction history, chronological postings, and running balances for any ledger account.
-          </p>
-        </div>
+    <div className="space-y-6 max-w-7xl mx-auto select-none">
+      {/* ========================================================================= */}
+      {/* TIER 1: LEDGER DIRECTORY & SEARCH HUB (When no accountId is active)        */}
+      {/* ========================================================================= */}
+      {!selectedAccountId && (
+        <div className="space-y-6">
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-1">
+                <BookOpen className="w-4 h-4" />
+                <span>Core Ledger & Account Statement Directory</span>
+              </div>
+              <h1 className="text-2xl font-bold text-white tracking-tight">
+                Account Ledger Directory
+              </h1>
+              <p className="text-xs text-slate-400 mt-1">
+                Search, inspect running balances, and open focused transaction statements for any ledger account.
+              </p>
+            </div>
 
-        <div className="flex items-center gap-2.5">
-          <Link
-            href="/vouchers/new"
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md shadow-emerald-700/20 transition-all"
-          >
-            <Plus className="w-4 h-4" />
-            <span>New Voucher</span>
-          </Link>
-          <button
-            onClick={exportCSV}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export CSV</span>
-          </button>
-          <button
-            onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            <span>Print Ledger</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Account Selector & Filters Bar */}
-      <div className="bg-[#0f172a] border border-slate-800 p-5 rounded-2xl space-y-4 no-print shadow-sm">
-        {/* Row 1: Searchable Account Selector */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-          <div className="md:col-span-6 relative">
-            <label className="block text-[11px] uppercase font-bold text-slate-400 mb-1.5">
-              Select Ledger Account
-            </label>
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Search account code or name (e.g. Rent, Bank, 5200)..."
-                value={accountSearch}
-                onChange={(e) => {
-                  setAccountSearch(e.target.value);
-                  setIsDropdownOpen(true);
-                }}
-                onFocus={() => setIsDropdownOpen(true)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-10 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-              />
+            <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                onClick={() => setShowCreateLedgerModal(true)}
+                className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-bold border border-slate-700 transition-all shadow-sm"
               >
-                <ChevronDown className="w-4 h-4" />
+                <Plus className="w-4 h-4 text-emerald-400" />
+                <span>+ Create New Ledger</span>
               </button>
 
-              {/* Autocomplete Dropdown */}
-              {isDropdownOpen && (
-                <div className="absolute top-full left-0 right-0 mt-1.5 bg-slate-900 border border-slate-750 rounded-xl max-h-64 overflow-y-auto shadow-2xl z-50 divide-y divide-slate-800/80">
-                  {filteredAccountOptions.map((acc) => (
-                    <button
-                      key={acc.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedAccountId(acc.id);
-                        setAccountSearch(`${acc.code} - ${acc.name}`);
-                        setIsDropdownOpen(false);
-                      }}
-                      className="w-full text-left px-3.5 py-2.5 text-xs hover:bg-slate-800/90 flex items-center justify-between transition-colors group"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-emerald-400">{acc.code}</span>
-                        <span className="text-slate-200 group-hover:text-white font-medium">{acc.name}</span>
-                      </div>
-                      <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
-                        {acc.type}
-                      </span>
-                    </button>
-                  ))}
-                  {filteredAccountOptions.length === 0 && (
-                    <div className="p-4 text-center text-xs text-slate-500">No matching accounts found</div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Quick-select Account Shortcut Pills */}
-          <div className="md:col-span-6">
-            <label className="block text-[11px] uppercase font-bold text-slate-400 mb-1.5">
-              Quick Switch Accounts
-            </label>
-            <div className="flex flex-wrap gap-1.5">
-              {[
-                { id: 'acc_5200', label: '5200 Office Rent' },
-                { id: 'acc_1110', label: '1110 Operating Bank' },
-                { id: 'acc_4100', label: '4100 SaaS Revenue' },
-                { id: 'acc_1130', label: '1130 Accounts Receivable' },
-                { id: 'acc_1510', label: '1510 Property #1206' },
-                { id: 'acc_4900', label: '4900 FX Gain/Loss' }
-              ].map(item => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedAccountId(item.id);
-                    setAccountSearch('');
-                    setIsDropdownOpen(false);
-                  }}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-mono transition-all border ${
-                    selectedAccountId === item.id
-                      ? 'bg-emerald-950 text-emerald-300 border-emerald-700 font-bold shadow-sm'
-                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:border-slate-700'
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Row 2: Date Filters & Preset Buttons */}
-        <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-slate-800/80 text-xs">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 text-slate-300">
-              <Calendar className="w-4 h-4 text-emerald-400" />
-              <span>From:</span>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
-              />
-            </div>
-
-            <div className="flex items-center gap-2 text-slate-300">
-              <span>To:</span>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
-              />
-            </div>
-
-            {/* Tag Filter */}
-            <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-700 px-3 py-1 rounded-lg">
-              <Tag className="w-3.5 h-3.5 text-emerald-400" />
-              <select
-                value={selectedTag}
-                onChange={(e) => setSelectedTag(e.target.value)}
-                className="bg-transparent text-xs text-white focus:outline-none cursor-pointer"
+              <Link
+                href="/vouchers/new"
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-700/25 transition-all"
               >
-                <option value="">All Tags (#)</option>
-                <option value="#1206">#1206 (Commercial Unit)</option>
-                <option value="#Advisory">#Advisory</option>
-                <option value="#Capital">#Capital</option>
-                <option value="#HQ-Rent">#HQ-Rent</option>
-                <option value="#SaaS">#SaaS</option>
-              </select>
+                <PlusCircle className="w-4 h-4" />
+                <span>+ New Voucher</span>
+              </Link>
             </div>
           </div>
 
-          {/* Quick Period Presets */}
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => applyPreset('ALL_TIME')}
-              className={`px-2 py-0.5 rounded text-[11px] font-medium border ${!startDate && !endDate ? 'bg-emerald-950 text-emerald-300 border-emerald-800' : 'bg-slate-900 text-slate-400 border-slate-800'}`}
-            >
-              All Time
-            </button>
-            <button
-              type="button"
-              onClick={() => applyPreset('THIS_MONTH')}
-              className="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-900 text-slate-400 border border-slate-800 hover:text-white"
-            >
-              This Month
-            </button>
-            <button
-              type="button"
-              onClick={() => applyPreset('LAST_MONTH')}
-              className="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-900 text-slate-400 border border-slate-800 hover:text-white"
-            >
-              Last Month
-            </button>
-            <button
-              type="button"
-              onClick={() => applyPreset('THIS_FY')}
-              className="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-900 text-slate-400 border border-slate-800 hover:text-white"
-            >
-              This FY
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Account Overview Summary Card */}
-      {currentAccount && (
-        <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <span className="font-mono text-sm font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/60">
-                  {currentAccount.code}
-                </span>
-                <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-semibold">
-                  {currentAccount.type}
-                </span>
-                <span className="text-xs text-slate-400">
-                  Path: <strong className="text-slate-300 font-mono">{currentAccount.path}</strong>
-                </span>
+          {/* Search & Category Filter Bar */}
+          <div className="bg-[#0f172a] border border-slate-800 p-4 rounded-2xl space-y-3 shadow-sm">
+            <div className="flex flex-col md:flex-row items-center gap-3">
+              {/* Search Bar */}
+              <div className="relative flex-1 w-full">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search ledgers by code, account name, tags, or taxonomy path..."
+                  value={directorySearch}
+                  onChange={(e) => setDirectorySearch(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                />
               </div>
-              <h2 className="text-xl font-bold text-white tracking-tight">
-                {currentAccount.name}
-              </h2>
-            </div>
 
-            {/* Closing Balance Pill */}
-            <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800 text-right">
-              <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                Period Closing Balance
-              </span>
-              <div className="flex items-center justify-end gap-2 mt-0.5">
-                <span className="text-xl font-bold font-mono text-white">
-                  {formatAmount(Math.abs(summary.closingDisplayBalance))}
-                </span>
-                <span className={`text-xs font-bold font-mono px-2 py-0.5 rounded ${
-                  summary.closingBalanceType === 'Dr' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-sky-950 text-sky-400 border border-sky-800'
-                }`}>
-                  {summary.closingBalanceType}
-                </span>
+              {/* Category Filter Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto w-full md:w-auto pb-1 md:pb-0">
+                {['ALL', 'ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'].map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setDirectoryCategoryFilter(cat)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap border ${
+                      directoryCategoryFilter === cat
+                        ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-slate-200'
+                    }`}
+                  >
+                    {cat === 'ALL' ? 'All Heads' : cat}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
 
-          {/* Account Metrics Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Opening Balance</span>
-              <div className="font-mono font-bold text-slate-200 text-sm mt-1 flex items-center justify-between">
-                <span>{formatAmount(Math.abs(summary.openingDisplayBalance))}</span>
-                <span className="text-[10px] text-slate-500 font-normal">{summary.openingBalanceType}</span>
+          {/* Accounts Directory Table */}
+          <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+            <div className="p-4 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
+              <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                Active Posting Ledgers ({filteredDirectoryAccounts.length})
+              </div>
+              <div className="text-xs text-slate-400">
+                Click any account row to open its detailed statement
               </div>
             </div>
 
-            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Period Debits (Dr)</span>
-              <div className="font-mono font-bold text-emerald-400 text-sm mt-1">
-                {formatAmount(summary.periodDebitTotal)}
-              </div>
-            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-950 text-slate-400 text-[11px] uppercase tracking-wider font-semibold border-b border-slate-800">
+                  <tr>
+                    <th className="py-3 px-4 w-28">Code</th>
+                    <th className="py-3 px-4">Account Name</th>
+                    <th className="py-3 px-4">Primary Head</th>
+                    <th className="py-3 px-4">Hierarchy Path</th>
+                    <th className="py-3 px-4">Governance</th>
+                    <th className="py-3 px-4 text-right">Transactions</th>
+                    <th className="py-3 px-4 text-right">Current Running Balance</th>
+                    <th className="py-3 px-4 text-center">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {filteredDirectoryAccounts.map((acc) => (
+                    <tr
+                      key={acc.id}
+                      onClick={() => router.push(`/ledger?accountId=${acc.id}`)}
+                      className="hover:bg-slate-850/50 cursor-pointer transition-colors group"
+                    >
+                      <td className="py-3 px-4 font-mono font-bold text-emerald-400">
+                        {acc.code}
+                      </td>
+                      <td className="py-3 px-4 font-semibold text-slate-100 group-hover:text-emerald-300 transition-colors">
+                        <div>{acc.name}</div>
+                        {acc.tags && acc.tags.length > 0 && (
+                          <div className="flex items-center gap-1 mt-1">
+                            {acc.tags.map((t: string) => (
+                              <span key={t} className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getCategoryBadge(acc.type)}`}>
+                          {acc.type}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 font-mono text-[11px] text-slate-400">
+                        {acc.path}
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-1.5">
+                          {acc.sop_count > 0 && (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-sky-950 text-sky-400 border border-sky-800/60">
+                              {acc.sop_count} SOP Steps
+                            </span>
+                          )}
+                          {acc.has_triggers && (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800/60">
+                              Triggers Active
+                            </span>
+                          )}
+                          {!acc.sop_count && !acc.has_triggers && (
+                            <span className="text-slate-600 text-[11px]">—</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono text-slate-300">
+                        {acc.transaction_count}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono font-bold text-slate-100 whitespace-nowrap">
+                        <span>{formatAmount(acc.displayBalance)}</span>{' '}
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                          acc.normalSide === 'Dr' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60' : 'bg-sky-950 text-sky-400 border border-sky-800/60'
+                        }`}>
+                          {acc.normalSide}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 group-hover:bg-emerald-600 text-slate-300 group-hover:text-white text-xs font-semibold transition-all">
+                          <span>Open</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
 
-            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Period Credits (Cr)</span>
-              <div className="font-mono font-bold text-sky-400 text-sm mt-1">
-                {formatAmount(summary.periodCreditTotal)}
-              </div>
-            </div>
-
-            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Net Movement</span>
-              <div className="font-mono font-bold text-white text-sm mt-1">
-                {formatAmount(Math.abs(summary.periodNetMovement))}
-              </div>
+                  {filteredDirectoryAccounts.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="py-12 text-center text-slate-500 text-xs">
+                        No ledger accounts found matching your search query.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
       )}
 
-      {/* Ledger Transaction Grid Card */}
-      <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <h3 className="text-sm font-bold text-white">Chronological Postings & Running Balance</h3>
-          <span className="text-xs text-slate-400">
-            {ledgerData?.transactions?.length || 0} transactions in selected timeframe
-          </span>
-        </div>
+      {/* ========================================================================= */}
+      {/* TIER 2: DEDICATED FOCUSED LEDGER WORKSPACE (When accountId is active)     */}
+      {/* ========================================================================= */}
+      {selectedAccountId && ledgerData && ledgerData.account && (
+        <div className="space-y-6">
+          {/* Top Back & Account Header Bar */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-800">
+            <div className="space-y-1">
+              <button
+                type="button"
+                onClick={() => router.push('/ledger')}
+                className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-emerald-400 transition-colors font-medium mb-1"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>← Back to Ledger Directory</span>
+              </button>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-900/90 text-slate-400 border-b border-slate-800 text-[11px] uppercase tracking-wider font-semibold">
-              <tr>
-                <th className="py-3 px-4">Date</th>
-                <th className="py-3 px-4">Voucher No</th>
-                <th className="py-3 px-4">Particulars / Memo</th>
-                <th className="py-3 px-4">Tags (#)</th>
-                <th className="py-3 px-4 text-right text-emerald-400">Debit (Dr)</th>
-                <th className="py-3 px-4 text-right text-sky-400">Credit (Cr)</th>
-                <th className="py-3 px-4 text-right">Cumulative Balance</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60">
-              {/* Opening Balance Row */}
-              <tr className="bg-slate-900/60 font-semibold italic text-slate-300">
-                <td className="py-2.5 px-4 font-mono text-slate-400">{startDate || '—'}</td>
-                <td className="py-2.5 px-4 font-mono text-slate-500">OPENING</td>
-                <td className="py-2.5 px-4" colSpan={2}>
-                  <span>Opening Balance Forward</span>
-                </td>
-                <td className="py-2.5 px-4 text-right font-mono">—</td>
-                <td className="py-2.5 px-4 text-right font-mono">—</td>
-                <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-200">
-                  {formatAmount(Math.abs(summary.openingDisplayBalance))} {summary.openingBalanceType}
-                </td>
-              </tr>
+              <div className="flex items-center gap-3">
+                <span className="text-xl font-bold font-mono text-emerald-400">
+                  {ledgerData.account.code}
+                </span>
+                <h1 className="text-2xl font-bold text-white tracking-tight">
+                  {ledgerData.account.name}
+                </h1>
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${getCategoryBadge(ledgerData.account.type)}`}>
+                  {ledgerData.account.type}
+                </span>
+              </div>
 
-              {/* Transactions */}
-              {(ledgerData?.transactions || []).map((tx: any) => (
-                <tr key={tx.line_id} className="hover:bg-slate-850/50 transition-colors">
-                  <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">
-                    {tx.entry_date}
-                  </td>
-                  <td className="py-3 px-4 font-mono font-bold text-slate-200 whitespace-nowrap">
-                    <Link href={`/vouchers`} className="hover:text-emerald-400 underline decoration-dotted">
-                      {tx.entry_number}
-                    </Link>
-                    {tx.reference && (
-                      <div className="text-[10px] text-slate-500 font-mono font-normal">
-                        Ref: {tx.reference}
-                      </div>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 max-w-sm">
-                    <div className="text-slate-100 font-medium">{tx.particulars}</div>
-                    {tx.currency !== activeCompany?.base_currency && (
-                      <div className="text-[10px] text-sky-400 font-mono">
-                        Foreign: {Math.abs(tx.foreign_amount)} {tx.currency} @ {tx.exchange_rate}
-                      </div>
-                    )}
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="flex flex-wrap gap-1">
-                      {(tx.tags || []).map((t: string, i: number) => (
-                        <span key={i} className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/40 font-mono">
+              <div className="flex items-center gap-3 text-xs text-slate-400 font-mono">
+                <span>Path: {ledgerData.account.path}</span>
+                <span>•</span>
+                <span>Base Currency: <strong className="text-slate-200">{activeCompany?.base_currency}</strong></span>
+                {ledgerData.account.tags && ledgerData.account.tags.length > 0 && (
+                  <>
+                    <span>•</span>
+                    <div className="flex items-center gap-1">
+                      {ledgerData.account.tags.map((t: string) => (
+                        <span key={t} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px]">
                           {t}
                         </span>
                       ))}
                     </div>
-                  </td>
-                  <td className="py-3 px-4 text-right font-mono font-bold text-emerald-400 whitespace-nowrap">
-                    {tx.debit > 0 ? formatAmount(tx.debit) : '—'}
-                  </td>
-                  <td className="py-3 px-4 text-right font-mono font-bold text-sky-400 whitespace-nowrap">
-                    {tx.credit > 0 ? formatAmount(tx.credit) : '—'}
-                  </td>
-                  <td className="py-3 px-4 text-right font-mono font-bold text-slate-100 whitespace-nowrap">
-                    {formatAmount(Math.abs(tx.running_display_balance))} <span className="text-[10px] text-slate-400 font-normal">{tx.running_balance_type}</span>
-                  </td>
-                </tr>
-              ))}
+                  </>
+                )}
+              </div>
+            </div>
 
-              {ledgerData?.transactions?.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-500 text-xs">
-                    No transactions recorded for this account in the selected timeframe.
-                  </td>
-                </tr>
-              )}
-            </tbody>
+            {/* Action Buttons */}
+            <div className="flex items-center gap-2.5 self-start md:self-auto">
+              <button
+                type="button"
+                onClick={() => setShowDrawer(true)}
+                className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-bold border border-slate-700 shadow-sm transition-all"
+                title="Open SOP, Triggers & Rules Drawer"
+              >
+                <Settings className="w-4 h-4 text-amber-400" />
+                <span>Action & Info Hub</span>
+                {(ledgerData.account.sop_steps?.length > 0 || Object.keys(ledgerData.account.trigger_rules || {}).length > 0) && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                )}
+              </button>
 
-            {/* Closing Balance Footer */}
-            <tfoot className="bg-slate-900 font-bold border-t-2 border-slate-700 text-xs">
-              <tr>
-                <td colSpan={4} className="py-3 px-4 text-slate-200 uppercase">
-                  Period Totals & Closing Balance
-                </td>
-                <td className="py-3 px-4 text-right font-mono text-emerald-400 text-sm">
-                  {formatAmount(summary.periodDebitTotal)}
-                </td>
-                <td className="py-3 px-4 text-right font-mono text-sky-400 text-sm">
-                  {formatAmount(summary.periodCreditTotal)}
-                </td>
-                <td className="py-3 px-4 text-right font-mono text-white text-sm">
-                  {formatAmount(Math.abs(summary.closingDisplayBalance))} <span className="text-xs text-emerald-400">{summary.closingBalanceType}</span>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
+              <button
+                type="button"
+                onClick={handleExportCSV}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export CSV</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Print</span>
+              </button>
+
+              <Link
+                href="/vouchers/new"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-700/20 transition-all"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>New Voucher</span>
+              </Link>
+            </div>
+          </div>
+
+          {/* Compact Period Selector Bar & KPI Strip */}
+          <div className="bg-[#0f172a] border border-slate-800 p-4 rounded-2xl space-y-4 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-4 text-xs">
+              {/* Presets */}
+              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+                {[
+                  { id: 'ALL', label: 'All Time' },
+                  { id: 'THIS_MONTH', label: 'This Month' },
+                  { id: 'LAST_MONTH', label: 'Last Month' },
+                  { id: 'THIS_FY', label: 'This FY' },
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => handleApplyPreset(p.id as any)}
+                    className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
+                      activePreset === p.id
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Custom Date Pickers */}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 text-slate-300">
+                  <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>From:</span>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => { setStartDate(e.target.value); setActivePreset('ALL'); }}
+                    className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div className="flex items-center gap-2 text-slate-300">
+                  <span>To:</span>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => { setEndDate(e.target.value); setActivePreset('ALL'); }}
+                    className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* KPI Summary Strip */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-3 border-t border-slate-800 text-xs">
+              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
+                <span className="text-[10px] text-slate-400 uppercase font-semibold block">Opening Balance</span>
+                <strong className="text-slate-200 font-mono text-sm block mt-0.5">
+                  {formatAmount(ledgerData.totals.openingBalance)} {ledgerData.totals.openingSide}
+                </strong>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
+                <span className="text-[10px] text-emerald-400 uppercase font-semibold block">Period Debits (DR)</span>
+                <strong className="text-emerald-300 font-mono text-sm block mt-0.5">
+                  {formatAmount(ledgerData.totals.periodDebits)}
+                </strong>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
+                <span className="text-[10px] text-sky-400 uppercase font-semibold block">Period Credits (CR)</span>
+                <strong className="text-sky-300 font-mono text-sm block mt-0.5">
+                  {formatAmount(ledgerData.totals.periodCredits)}
+                </strong>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
+                <span className="text-[10px] text-slate-400 uppercase font-semibold block">Net Movement</span>
+                <strong className="text-slate-200 font-mono text-sm block mt-0.5">
+                  {formatAmount(ledgerData.totals.netMovement)}
+                </strong>
+              </div>
+
+              <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-700/60 col-span-2 sm:col-span-1 shadow-sm">
+                <span className="text-[10px] text-emerald-300 uppercase font-bold block">Closing Balance</span>
+                <strong className="text-emerald-400 font-mono text-base block mt-0.5">
+                  {formatAmount(ledgerData.totals.closingBalance)} {ledgerData.totals.closingSide}
+                </strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick In-Ledger Search & Display Toggles Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#0f172a] border border-slate-800 p-3.5 rounded-2xl text-xs shadow-sm">
+            {/* In-Ledger Search Input */}
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search transactions: memo, voucher #, tag, amount..."
+                value={inLedgerSearch}
+                onChange={(e) => setInLedgerSearch(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            {/* View Toggles */}
+            <div className="flex items-center gap-4 text-slate-300">
+              <label className="flex items-center gap-2 cursor-pointer hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={showNarrations}
+                  onChange={(e) => setShowNarrations(e.target.checked)}
+                  className="rounded text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>Show Narrations</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={showForeignCurrencies}
+                  onChange={(e) => setShowForeignCurrencies(e.target.checked)}
+                  className="rounded text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>Show Forex</span>
+              </label>
+
+              <span className="text-slate-500 font-mono text-[11px]">
+                {filteredTransactions.length} of {ledgerData.transactions.length} rows
+              </span>
+            </div>
+          </div>
+
+          {/* Chronological Postings Grid (Immediately Visible!) */}
+          <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-950 text-slate-400 text-[11px] uppercase tracking-wider font-semibold border-b border-slate-800">
+                  <tr>
+                    <th className="py-3 px-4 w-28">Date</th>
+                    <th className="py-3 px-4 w-32">Voucher No</th>
+                    <th className="py-3 px-4">Particulars / Memo</th>
+                    {showForeignCurrencies && <th className="py-3 px-4 text-right">Forex Amount</th>}
+                    <th className="py-3 px-4">Tags (#)</th>
+                    <th className="py-3 px-4 text-right w-32">Debit (DR)</th>
+                    <th className="py-3 px-4 text-right w-32">Credit (CR)</th>
+                    <th className="py-3 px-4 text-right w-36">Cumulative Balance</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {/* Opening Balance Row */}
+                  <tr className="bg-slate-900/60 font-semibold text-slate-300">
+                    <td className="py-2.5 px-4 font-mono text-slate-400">{startDate || '—'}</td>
+                    <td className="py-2.5 px-4 font-mono text-slate-500">OPENING-BAL</td>
+                    <td className="py-2.5 px-4 italic text-slate-400">Opening Balance Brought Forward</td>
+                    {showForeignCurrencies && <td className="py-2.5 px-4 text-right font-mono text-slate-500">—</td>}
+                    <td className="py-2.5 px-4 font-mono text-slate-500">—</td>
+                    <td className="py-2.5 px-4 text-right font-mono text-slate-500">—</td>
+                    <td className="py-2.5 px-4 text-right font-mono text-slate-500">—</td>
+                    <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-200">
+                      {formatAmount(ledgerData.totals.openingBalance)} {ledgerData.totals.openingSide}
+                    </td>
+                  </tr>
+
+                  {/* Transaction Rows */}
+                  {filteredTransactions.map((tx: any) => (
+                    <tr key={tx.lineId} className="hover:bg-slate-850/40 transition-colors group">
+                      <td className="py-3 px-4 font-mono text-slate-300 whitespace-nowrap">
+                        {tx.entryDate}
+                      </td>
+                      <td className="py-3 px-4 font-mono font-bold text-slate-200 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <Link href="/vouchers" className="hover:text-emerald-400 hover:underline">
+                            {tx.entryNumber}
+                          </Link>
+                          {tx.isReversal && (
+                            <span className="px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 text-[10px] font-bold border border-rose-800/50">
+                              REV
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 text-slate-200">
+                        <div className="font-medium text-slate-100">{tx.particulars}</div>
+                        {showNarrations && tx.reference && (
+                          <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
+                            Ref: {tx.reference}
+                          </div>
+                        )}
+                      </td>
+                      {showForeignCurrencies && (
+                        <td className="py-3 px-4 text-right font-mono text-amber-300 whitespace-nowrap">
+                          {tx.lineCurrency !== activeCompany?.base_currency ? (
+                            <span>{tx.foreignAmount.toLocaleString()} {tx.lineCurrency}</span>
+                          ) : (
+                            <span className="text-slate-600">—</span>
+                          )}
+                        </td>
+                      )}
+                      <td className="py-3 px-4">
+                        {tx.tags && tx.tags.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {tx.tags.map((t: string) => (
+                              <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-slate-600 text-[11px]">—</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono font-semibold text-emerald-400 whitespace-nowrap">
+                        {tx.debit > 0 ? formatAmount(tx.debit) : '—'}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono font-semibold text-sky-400 whitespace-nowrap">
+                        {tx.credit > 0 ? formatAmount(tx.credit) : '—'}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono font-bold text-slate-100 whitespace-nowrap">
+                        <span>{formatAmount(tx.runningBalance)}</span>{' '}
+                        <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                          tx.balanceSide === 'Dr' ? 'bg-emerald-950 text-emerald-400' : 'bg-sky-950 text-sky-400'
+                        }`}>
+                          {tx.balanceSide}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+
+                  {filteredTransactions.length === 0 && (
+                    <tr>
+                      <td colSpan={showForeignCurrencies ? 8 : 7} className="py-12 text-center text-slate-500 text-xs">
+                        No transactions found in this period matching your search criteria.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* SLIDE-OUT ACTION & INFO HUB GOVERNANCE DRAWER                             */}
+      {/* ========================================================================= */}
+      {showDrawer && ledgerData?.account && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex justify-end">
+          <div className="w-full max-w-xl bg-slate-900 border-l border-slate-800 h-full flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-right duration-200">
+            {/* Drawer Header */}
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Ledger Action & Governance Hub
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono">
+                    {ledgerData.account.code} - {ledgerData.account.name}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowDrawer(false)}
+                className="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Drawer Navigation Tabs */}
+            <div className="flex border-b border-slate-800 bg-slate-900/90 text-xs">
+              {[
+                { id: 'SOP', label: 'SOP & Workflow', icon: Sparkles },
+                { id: 'TRIGGERS', label: 'Scrutiny Triggers', icon: AlertCircle },
+                { id: 'TAGS', label: 'Tags & Notes', icon: Tag },
+                { id: 'VIEW', label: 'View & Print Options', icon: SlidersHorizontal },
+              ].map((tab) => {
+                const Icon = tab.icon;
+                const isActive = drawerTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setDrawerTab(tab.id as any)}
+                    className={`flex-1 py-3 px-3 flex items-center justify-center gap-1.5 font-bold transition-all border-b-2 ${
+                      isActive
+                        ? 'border-emerald-500 text-emerald-400 bg-emerald-950/20'
+                        : 'border-transparent text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Drawer Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 text-xs">
+              {drawerSuccessMsg && (
+                <div className="p-3.5 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{drawerSuccessMsg}</span>
+                </div>
+              )}
+
+              {/* TAB 1: SOP & WORKFLOW STEPS */}
+              {drawerTab === 'SOP' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-bold text-white">Standard Operating Procedure (SOP)</h4>
+                      <p className="text-slate-400 text-[11px]">
+                        Save mandatory steps bookkeepers must complete when posting entries to this ledger.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleAddSopStep}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px]"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Step</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {sopSteps.map((step, idx) => (
+                      <div key={idx} className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-emerald-400 font-mono text-[11px]">
+                            Step {step.step_number}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSopStep(idx)}
+                            className="text-slate-500 hover:text-rose-400 p-1"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <input
+                          type="text"
+                          placeholder="Step title (e.g. Collect Fuel Receipt & Driver KM Reading)"
+                          value={step.title}
+                          onChange={(e) => handleUpdateSopStep(idx, 'title', e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:border-emerald-500 focus:outline-none"
+                        />
+
+                        <textarea
+                          rows={2}
+                          placeholder="Detailed instructions (e.g. Verify logbook, calculate mileage variance, get CEO sign-off before posting)"
+                          value={step.instruction}
+                          onChange={(e) => handleUpdateSopStep(idx, 'instruction', e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                    ))}
+
+                    {sopSteps.length === 0 && (
+                      <div className="p-8 text-center bg-slate-950 rounded-xl border border-dashed border-slate-800 text-slate-500">
+                        No SOP steps defined yet. Click "+ Add Step" to establish posting guidelines.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: SCRUTINY TRIGGERS & LIMITS */}
+              {drawerTab === 'TRIGGERS' && (
+                <div className="space-y-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-white">Scrutiny Rules & Action Queue Triggers</h4>
+                    <p className="text-slate-400 text-[11px]">
+                      Configure automated alerts when activity thresholds are violated.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4 bg-slate-950 p-4 rounded-xl border border-slate-800">
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1">
+                        Minimum Monthly Required Activity
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="e.g. 1 (Requires at least 1 entry per month for rent/utilities)"
+                        value={triggerRules.min_monthly_transactions ?? ''}
+                        onChange={(e) => setTriggerRules({ ...triggerRules, min_monthly_transactions: parseInt(e.target.value) || 0 })}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
+                      />
+                      <span className="text-[10px] text-slate-500 mt-1 block">
+                        Action Queue will trigger a high-severity alert if 0 transactions are detected in a month.
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1">
+                        Single Transaction Ceiling Limit ({activeCompany?.base_currency})
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="e.g. 10000 (Flag any single transaction above this amount)"
+                        value={triggerRules.max_single_transaction_limit ?? ''}
+                        onChange={(e) => setTriggerRules({ ...triggerRules, max_single_transaction_limit: parseFloat(e.target.value) || 0 })}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
+                      />
+                      <span className="text-[10px] text-slate-500 mt-1 block">
+                        Entries exceeding this limit will require senior managerial approval in Action Queue.
+                      </span>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={triggerRules.alert_on_unusual_variance ?? false}
+                          onChange={(e) => setTriggerRules({ ...triggerRules, alert_on_unusual_variance: e.target.checked })}
+                          className="rounded text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span className="text-slate-200 font-semibold">Flag Unusual Month-over-Month Variance (&gt;30%)</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: TAGS & DESCRIPTION */}
+              {drawerTab === 'TAGS' && (
+                <div className="space-y-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-white">Persistent Tags & Account Notes</h4>
+                    <p className="text-slate-400 text-[11px]">
+                      Manage default tags and account description for audit documentation.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1.5">Default Tags (#)</label>
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {accountTags.map((t) => (
+                          <span key={t} className="px-2 py-1 rounded-lg bg-slate-800 text-slate-200 font-mono text-[11px] flex items-center gap-1">
+                            <span>{t}</span>
+                            <button type="button" onClick={() => handleRemoveTag(t)} className="text-slate-400 hover:text-rose-400">
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          placeholder="e.g. #1206, #HQ, #Vendors"
+                          value={newTagInput}
+                          onChange={(e) => setNewTagInput(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTag(e))}
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleAddTag}
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold"
+                        >
+                          Add Tag
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1">Account Description / Audit Notes</label>
+                      <textarea
+                        rows={4}
+                        placeholder="e.g. Commercial office rental account for Bengaluru HQ facility. TDS 194-I applies."
+                        value={accountDescription}
+                        onChange={(e) => setAccountDescription(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 4: VIEW & PRINT OPTIONS */}
+              {drawerTab === 'VIEW' && (
+                <div className="space-y-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-white">Statement View & Multi-Currency Preferences</h4>
+                    <p className="text-slate-400 text-[11px]">
+                      Customize how ledger transactions are rendered on screen and printed.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
+                    <label className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer">
+                      <div>
+                        <div className="font-semibold text-slate-200">Show Full Voucher Narrations</div>
+                        <div className="text-[10px] text-slate-400">Renders detailed memos and invoice reference lines</div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={showNarrations}
+                        onChange={(e) => setShowNarrations(e.target.checked)}
+                        className="rounded text-emerald-600 focus:ring-emerald-500"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer">
+                      <div>
+                        <div className="font-semibold text-slate-200">Display Multi-Currency Forex Amounts</div>
+                        <div className="text-[10px] text-slate-400">Shows foreign currency (EUR/AED/GBP/USD) alongside base amounts</div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={showForeignCurrencies}
+                        onChange={(e) => setShowForeignCurrencies(e.target.checked)}
+                        className="rounded text-emerald-600 focus:ring-emerald-500"
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Drawer Footer */}
+            <div className="p-4 border-t border-slate-800 bg-slate-950 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setShowDrawer(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-750 font-medium"
+              >
+                Close
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveGovernance}
+                disabled={isSavingGovernance}
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-700/20 transition-all disabled:opacity-50"
+              >
+                {isSavingGovernance ? 'Saving Changes...' : 'Save Governance Parameters'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* On-The-Fly Hierarchical Create Ledger Modal */}
+      {showCreateLedgerModal && (
+        <CreateLedgerModal
+          companyId={activeCompanyId || ''}
+          existingAccounts={directoryAccounts}
+          isOpen={showCreateLedgerModal}
+          onClose={() => setShowCreateLedgerModal(false)}
+          onAccountCreated={(newAccount) => {
+            setShowCreateLedgerModal(false);
+            fetchData();
+            router.push(`/ledger?accountId=${newAccount.id}`);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-export default function LedgerPage() {
+export default function AccountLedgerPage() {
   return (
-    <Suspense fallback={<div className="text-center py-12 text-slate-400 text-xs">Loading ledger view...</div>}>
-      <LedgerViewerContent />
+    <Suspense fallback={<div className="p-8 text-center text-slate-400 font-mono text-xs">Loading ledger workspace...</div>}>
+      <LedgerContent />
     </Suspense>
   );
 }

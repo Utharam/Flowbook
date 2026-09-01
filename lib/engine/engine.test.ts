@@ -213,6 +213,41 @@ describe('Flowbook Double-Entry & Multi-Currency Engine Tests', () => {
     assert.ok(step2Res.entry);
   });
 
+  test('Ledger Governance: SOP Steps & Scrutiny Trigger Rules Persistence', () => {
+    const db = getDb();
+    const testSop = [
+      { step_number: 1, title: 'Check Driver Logbook', instruction: 'Record vehicle KM and odometer reading' },
+      { step_number: 2, title: 'Verify Fuel Invoice', instruction: 'Match petrol pump receipt with corporate card charge' }
+    ];
+    const testTriggers = {
+      min_monthly_transactions: 2,
+      max_single_transaction_limit: 7500,
+      alert_on_unusual_variance: true
+    };
+
+    db.prepare(`
+      UPDATE accounts SET 
+        sop_steps = ?,
+        trigger_rules = ?,
+        tags = ?
+      WHERE id = 'acc_5300'
+    `).run(JSON.stringify(testSop), JSON.stringify(testTriggers), JSON.stringify(['#Fuel', '#Fleet']));
+
+    const row = db.prepare('SELECT * FROM accounts WHERE id = ?').get('acc_5300') as any;
+    assert.ok(row);
+
+    const parsedSop = JSON.parse(row.sop_steps);
+    assert.strictEqual(parsedSop.length, 2);
+    assert.strictEqual(parsedSop[0].title, 'Check Driver Logbook');
+
+    const parsedTriggers = JSON.parse(row.trigger_rules);
+    assert.strictEqual(parsedTriggers.min_monthly_transactions, 2);
+    assert.strictEqual(parsedTriggers.max_single_transaction_limit, 7500);
+
+    const parsedTags = JSON.parse(row.tags);
+    assert.ok(parsedTags.includes('#Fuel'));
+  });
+
   test('Audit Event Logging & Immutable Trail', () => {
     const db = getDb();
     logAuditEvent(company.id, 'PROFILE_ALTERED', 'Auditor SID', 'Altered registered address for tax filing', { tax_year: 2026 });
