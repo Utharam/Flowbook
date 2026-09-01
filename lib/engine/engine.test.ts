@@ -315,7 +315,10 @@ Date,Reference,Counter_Ledger,Narration,Amount,Tags
 
   test('Smart Bank Statement Import: Validates Mathematical Closing Balance & Executes Atomic Batch Posting', () => {
     const db = getDb();
-    const bankAcc = (db.prepare("SELECT * FROM accounts WHERE id = 'acc_1110'").get() as unknown) as Account;
+    const bankAcc: Account = {
+      ...(db.prepare("SELECT * FROM accounts WHERE id = 'acc_1110'").get() as any),
+      last_reconciled_date: '2026-01-31'
+    };
 
     // Opening Balance + Deposits ($20,000) - Withdrawals ($4,500)
     const validContent = `

@@ -358,6 +358,8 @@ export function executeBankImportBatch(
     let maxDate = targetAccount.last_reconciled_date || '2026-01-01';
     let postedCount = 0;
 
+    const isDebitNormal = targetAccount.type === 'ASSET' || targetAccount.type === 'EXPENSE';
+
     // Post each transaction atomically
     for (const row of validatedRows) {
       if (row.date > maxDate) {
@@ -365,25 +367,39 @@ export function executeBankImportBatch(
       }
 
       const absAmount = Math.abs(row.amount);
-      const isDeposit = row.isInflow;
+      const isPositive = row.isInflow;
 
-      // For Inflow / Deposit: Dr Bank Account, Cr Counter Ledger
-      // For Outflow / Withdrawal: Dr Counter Ledger, Cr Bank Account
-      const lines = isDeposit
-        ? [
-            { accountId: targetAccount.id, debit: absAmount, currency: targetAccount.currency || company.base_currency, memo: row.narration, tags: row.tags },
-            { accountId: row.counterAccountId!, credit: absAmount, currency: company.base_currency, memo: row.narration, tags: row.tags }
-          ]
-        : [
-            { accountId: row.counterAccountId!, debit: absAmount, currency: company.base_currency, memo: row.narration, tags: row.tags },
-            { accountId: targetAccount.id, credit: absAmount, currency: targetAccount.currency || company.base_currency, memo: row.narration, tags: row.tags }
-          ];
+      // Handle Double-Entry Posting for ALL Account Types:
+      // For Debit-Normal (Asset/Expense): Positive (+) = Dr Target, Cr Counter; Negative (-) = Dr Counter, Cr Target
+      // For Credit-Normal (Liability/Equity/Revenue): Positive (+) = Cr Target, Dr Counter; Negative (-) = Dr Target, Cr Counter
+      let lines;
+      if (isDebitNormal) {
+        lines = isPositive
+          ? [
+              { accountId: targetAccount.id, debit: absAmount, currency: targetAccount.currency || company.base_currency, memo: row.narration, tags: row.tags },
+              { accountId: row.counterAccountId!, credit: absAmount, currency: company.base_currency, memo: row.narration, tags: row.tags }
+            ]
+          : [
+              { accountId: row.counterAccountId!, debit: absAmount, currency: company.base_currency, memo: row.narration, tags: row.tags },
+              { accountId: targetAccount.id, credit: absAmount, currency: targetAccount.currency || company.base_currency, memo: row.narration, tags: row.tags }
+            ];
+      } else {
+        lines = isPositive
+          ? [
+              { accountId: row.counterAccountId!, debit: absAmount, currency: company.base_currency, memo: row.narration, tags: row.tags },
+              { accountId: targetAccount.id, credit: absAmount, currency: targetAccount.currency || company.base_currency, memo: row.narration, tags: row.tags }
+            ]
+          : [
+              { accountId: targetAccount.id, debit: absAmount, currency: targetAccount.currency || company.base_currency, memo: row.narration, tags: row.tags },
+              { accountId: row.counterAccountId!, credit: absAmount, currency: company.base_currency, memo: row.narration, tags: row.tags }
+            ];
+      }
 
       const res = postJournalEntry(company, {
         companyId: company.id,
         entryDate: row.date,
         memo: row.narration,
-        reference: row.reference || `BANK-IMP-${row.date}`,
+        reference: row.reference || `IMP-${targetAccount.code}-${row.date}`,
         lines
       });
 
