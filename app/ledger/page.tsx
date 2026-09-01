@@ -786,7 +786,7 @@ function LedgerContent() {
             </div>
           </div>
 
-          {/* Chronological Postings Grid (With Counter Ledger & Inline Narration Edit!) */}
+          {/* Chronological Postings Grid (Tally-Inspired Clean Layout) */}
           <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -794,12 +794,11 @@ function LedgerContent() {
                   <tr>
                     <th className="py-3 px-4 w-28">Date</th>
                     <th className="py-3 px-4 w-32">Voucher No</th>
-                    <th className="py-3 px-4 w-64">Counter Ledger (Contra)</th>
-                    <th className="py-3 px-4">Particulars / Narration</th>
-                    {showForeignCurrencies && <th className="py-3 px-4 text-right">Forex Amount</th>}
-                    <th className="py-3 px-4">Tags (#)</th>
-                    <th className="py-3 px-4 text-right w-28">Debit (DR)</th>
-                    <th className="py-3 px-4 text-right w-28">Credit (CR)</th>
+                    <th className="py-3 px-4">Particulars (Counter Ledger)</th>
+                    {showForeignCurrencies && <th className="py-3 px-4 text-right w-32">Forex Amount</th>}
+                    <th className="py-3 px-4 w-28">Tags (#)</th>
+                    <th className="py-3 px-4 text-right w-32">Debit (DR)</th>
+                    <th className="py-3 px-4 text-right w-32">Credit (CR)</th>
                     <th className="py-3 px-4 text-right w-36">Cumulative Balance</th>
                   </tr>
                 </thead>
@@ -808,7 +807,6 @@ function LedgerContent() {
                   <tr className="bg-slate-900/60 font-semibold text-slate-300">
                     <td className="py-2.5 px-4 font-mono text-slate-400">{startDate || '—'}</td>
                     <td className="py-2.5 px-4 font-mono text-slate-500">OPENING-BAL</td>
-                    <td className="py-2.5 px-4 font-mono text-slate-500 italic">Brought Forward</td>
                     <td className="py-2.5 px-4 italic text-slate-400">Opening Balance Brought Forward</td>
                     {showForeignCurrencies && <td className="py-2.5 px-4 text-right font-mono text-slate-500">—</td>}
                     <td className="py-2.5 px-4 font-mono text-slate-500">—</td>
@@ -824,156 +822,167 @@ function LedgerContent() {
                     const isEditingThisMemo = editingMemoLineId === tx.lineId;
 
                     return (
-                      <tr key={tx.lineId} className="hover:bg-slate-850/40 transition-colors group">
-                        {/* 1. Date */}
-                        <td className="py-3 px-4 font-mono text-slate-300 whitespace-nowrap align-top">
-                          {tx.entryDate}
-                        </td>
+                      <React.Fragment key={tx.lineId}>
+                        {/* 1. Primary Financial Row */}
+                        <tr className={`hover:bg-slate-850/50 transition-colors group ${showNarrations ? 'border-b-0' : ''}`}>
+                          {/* Date */}
+                          <td className="py-2.5 px-4 font-mono text-slate-300 whitespace-nowrap">
+                            {tx.entryDate}
+                          </td>
 
-                        {/* 2. Voucher Number */}
-                        <td className="py-3 px-4 font-mono font-bold text-slate-200 whitespace-nowrap align-top">
-                          <div className="flex items-center gap-1.5">
-                            <Link href="/vouchers" className="hover:text-emerald-400 hover:underline">
-                              {tx.entryNumber}
-                            </Link>
-                            {tx.isReversal && (
-                              <span className="px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 text-[10px] font-bold border border-rose-800/50">
-                                REV
-                              </span>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* 3. Counter Ledger (Contra Account) */}
-                        <td className="py-3 px-4 align-top">
-                          {tx.primaryCounterAccount ? (
-                            <Link
-                              href={`/ledger?accountId=${tx.primaryCounterAccount.id}`}
-                              className="font-semibold text-slate-200 hover:text-emerald-400 hover:underline flex items-center gap-1 group/link"
-                              title={`Drill into ${tx.counterLedgerText}`}
-                            >
-                              <span className="font-mono text-emerald-400/90">{tx.primaryCounterAccount.code}</span>
-                              <span className="truncate max-w-[180px]">{tx.primaryCounterAccount.name}</span>
-                              {tx.counterLedgers?.length > 1 && (
-                                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
-                                  +{tx.counterLedgers.length - 1} split
+                          {/* Voucher Number */}
+                          <td className="py-2.5 px-4 font-mono font-bold text-slate-200 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5">
+                              <Link href="/vouchers" className="hover:text-emerald-400 hover:underline">
+                                {tx.entryNumber}
+                              </Link>
+                              {tx.isReversal && (
+                                <span className="px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 text-[10px] font-bold border border-rose-800/50">
+                                  REV
                                 </span>
                               )}
-                              <ArrowUpRight className="w-3 h-3 text-slate-500 group-hover/link:text-emerald-400 opacity-0 group-hover/link:opacity-100 transition-opacity" />
-                            </Link>
-                          ) : (
-                            <span className="text-slate-500 font-mono italic">Direct Entry</span>
-                          )}
-                        </td>
-
-                        {/* 4. Particulars / Narration (with Inline Edit!) */}
-                        <td className="py-3 px-4 text-slate-200 align-top">
-                          {isEditingThisMemo ? (
-                            <div className="flex items-center gap-2 max-w-md animate-in fade-in duration-150">
-                              <input
-                                type="text"
-                                value={editingMemoText}
-                                onChange={(e) => setEditingMemoText(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') saveEditingMemo(tx.entryId, tx.lineId);
-                                  if (e.key === 'Escape') cancelEditingMemo();
-                                }}
-                                autoFocus
-                                className="flex-1 bg-slate-900 border border-emerald-500 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none shadow-sm"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => saveEditingMemo(tx.entryId, tx.lineId)}
-                                disabled={isSavingMemo}
-                                className="p-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white"
-                                title="Save Narration"
-                              >
-                                <Check className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={cancelEditingMemo}
-                                className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white"
-                                title="Cancel"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
                             </div>
-                          ) : (
-                            <div className="flex items-start justify-between gap-2 group/memo">
-                              <div>
-                                <span className="font-medium text-slate-100">{tx.particulars}</span>
-                                {showNarrations && tx.reference && (
-                                  <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
-                                    Ref: {tx.reference}
-                                  </div>
+                          </td>
+
+                          {/* Particulars (Counter Ledger / Contra Account) */}
+                          <td className="py-2.5 px-4">
+                            {tx.primaryCounterAccount ? (
+                              <Link
+                                href={`/ledger?accountId=${tx.primaryCounterAccount.id}`}
+                                className="font-semibold text-slate-100 hover:text-emerald-400 hover:underline inline-flex items-center gap-1.5 group/link"
+                                title={`Drill into ${tx.counterLedgerText}`}
+                              >
+                                <span className="font-mono text-emerald-400 font-bold">{tx.primaryCounterAccount.code}</span>
+                                <span>{tx.primaryCounterAccount.name}</span>
+                                {tx.counterLedgers?.length > 1 && (
+                                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
+                                    +{tx.counterLedgers.length - 1} split
+                                  </span>
                                 )}
-                              </div>
-
-                              <button
-                                type="button"
-                                onClick={() => startEditingMemo(tx.lineId, tx.particulars)}
-                                className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-emerald-400 rounded hover:bg-slate-800 transition-all shrink-0"
-                                title="Edit Narration / Memo"
-                              >
-                                <Edit2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          )}
-                        </td>
-
-                        {/* 5. Forex Amount */}
-                        {showForeignCurrencies && (
-                          <td className="py-3 px-4 text-right font-mono text-amber-300 whitespace-nowrap align-top">
-                            {tx.lineCurrency !== activeCompany?.base_currency ? (
-                              <span>{tx.foreignAmount.toLocaleString()} {tx.lineCurrency}</span>
+                                <ArrowUpRight className="w-3 h-3 text-slate-500 group-hover/link:text-emerald-400 opacity-0 group-hover/link:opacity-100 transition-opacity" />
+                              </Link>
                             ) : (
-                              <span className="text-slate-600">—</span>
+                              <span className="text-slate-400 font-mono italic">Direct Entry</span>
                             )}
                           </td>
-                        )}
 
-                        {/* 6. Tags */}
-                        <td className="py-3 px-4 align-top">
-                          {tx.tags && tx.tags.length > 0 ? (
-                            <div className="flex flex-wrap gap-1">
-                              {tx.tags.map((t: string) => (
-                                <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
-                                  {t}
-                                </span>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-slate-600 text-[11px]">—</span>
+                          {/* Forex Amount (if enabled) */}
+                          {showForeignCurrencies && (
+                            <td className="py-2.5 px-4 text-right font-mono text-amber-300 whitespace-nowrap">
+                              {tx.lineCurrency !== activeCompany?.base_currency ? (
+                                <span>{tx.foreignAmount.toLocaleString()} {tx.lineCurrency}</span>
+                              ) : (
+                                <span className="text-slate-600">—</span>
+                              )}
+                            </td>
                           )}
-                        </td>
 
-                        {/* 7. Debit */}
-                        <td className="py-3 px-4 text-right font-mono font-semibold text-emerald-400 whitespace-nowrap align-top">
-                          {tx.debit > 0 ? formatAmount(tx.debit) : '—'}
-                        </td>
+                          {/* Tags */}
+                          <td className="py-2.5 px-4">
+                            {tx.tags && tx.tags.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {tx.tags.map((t: string) => (
+                                  <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                                    {t}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-slate-600 text-[11px]">—</span>
+                            )}
+                          </td>
 
-                        {/* 8. Credit */}
-                        <td className="py-3 px-4 text-right font-mono font-semibold text-sky-400 whitespace-nowrap align-top">
-                          {tx.credit > 0 ? formatAmount(tx.credit) : '—'}
-                        </td>
+                          {/* Debit (DR) */}
+                          <td className="py-2.5 px-4 text-right font-mono font-semibold text-emerald-400 whitespace-nowrap">
+                            {tx.debit > 0 ? formatAmount(tx.debit) : '—'}
+                          </td>
 
-                        {/* 9. Cumulative Balance */}
-                        <td className="py-3 px-4 text-right font-mono font-bold text-slate-100 whitespace-nowrap align-top">
-                          <span>{formatAmount(tx.runningBalance)}</span>{' '}
-                          <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
-                            tx.balanceSide === 'Dr' ? 'bg-emerald-950 text-emerald-400' : 'bg-sky-950 text-sky-400'
-                          }`}>
-                            {tx.balanceSide}
-                          </span>
-                        </td>
-                      </tr>
+                          {/* Credit (CR) */}
+                          <td className="py-2.5 px-4 text-right font-mono font-semibold text-sky-400 whitespace-nowrap">
+                            {tx.credit > 0 ? formatAmount(tx.credit) : '—'}
+                          </td>
+
+                          {/* Cumulative Balance */}
+                          <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-100 whitespace-nowrap">
+                            <span>{formatAmount(tx.runningBalance)}</span>{' '}
+                            <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                              tx.balanceSide === 'Dr' ? 'bg-emerald-950 text-emerald-400' : 'bg-sky-950 text-sky-400'
+                            }`}>
+                              {tx.balanceSide}
+                            </span>
+                          </td>
+                        </tr>
+
+                        {/* 2. Spanned Dedicated Narration Sub-Row (Tally-Style Horizontal Narration) */}
+                        {showNarrations && (
+                          <tr className="bg-slate-950/40 text-slate-400 border-b border-slate-850 hover:bg-slate-900/40 transition-colors">
+                            <td colSpan={showForeignCurrencies ? 8 : 7} className="py-1.5 px-4 pl-12 text-[11px]">
+                              {isEditingThisMemo ? (
+                                <div className="flex items-center gap-2 py-1 max-w-2xl animate-in fade-in duration-150">
+                                  <span className="text-emerald-400 font-bold font-mono">Edit Narration:</span>
+                                  <input
+                                    type="text"
+                                    value={editingMemoText}
+                                    onChange={(e) => setEditingMemoText(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') saveEditingMemo(tx.entryId, tx.lineId);
+                                      if (e.key === 'Escape') cancelEditingMemo();
+                                    }}
+                                    autoFocus
+                                    className="flex-1 bg-slate-900 border border-emerald-500 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none shadow-sm"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => saveEditingMemo(tx.entryId, tx.lineId)}
+                                    disabled={isSavingMemo}
+                                    className="p-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1 px-2 text-xs font-bold"
+                                    title="Save Narration"
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>Save</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={cancelEditingMemo}
+                                    className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white px-2 text-xs"
+                                    title="Cancel"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-between gap-4 group/memo">
+                                  <div className="flex items-center gap-2 italic text-slate-300">
+                                    <span className="text-slate-500 not-italic font-semibold text-[10px] uppercase tracking-wider">Narration:</span>
+                                    <span>{tx.particulars || 'No narration provided'}</span>
+                                    {tx.reference && (
+                                      <span className="not-italic text-slate-400 font-mono text-[10px] bg-slate-850 px-1.5 py-0.2 rounded border border-slate-750">
+                                        Ref: {tx.reference}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditingMemo(tx.lineId, tx.particulars)}
+                                    className="opacity-0 group-hover/memo:opacity-100 flex items-center gap-1 text-[10px] text-slate-400 hover:text-emerald-400 px-2 py-0.5 rounded hover:bg-slate-800 transition-all shrink-0 font-medium not-italic"
+                                    title="Edit Narration / Memo"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                    <span>Edit</span>
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })}
 
                   {filteredTransactions.length === 0 && (
                     <tr>
-                      <td colSpan={showForeignCurrencies ? 9 : 8} className="py-12 text-center text-slate-500 text-xs">
+                      <td colSpan={showForeignCurrencies ? 8 : 7} className="py-12 text-center text-slate-500 text-xs">
                         No transactions found in this period matching your search criteria.
                       </td>
                     </tr>
