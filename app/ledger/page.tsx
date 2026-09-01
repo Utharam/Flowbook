@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, Suspense } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useCompany } from '@/components/context/company-context';
@@ -33,7 +33,8 @@ import {
   Sparkles,
   Edit2,
   Check,
-  ArrowUpRight
+  ArrowUpRight,
+  Keyboard
 } from 'lucide-react';
 import { AccountType, SopStep, TriggerRules } from '@/lib/db/schema';
 
@@ -58,6 +59,10 @@ function LedgerContent() {
   const [selectedTag, setSelectedTag] = useState('');
   const [activePreset, setActivePreset] = useState<'ALL' | 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_FY'>('ALL');
   const [isLoading, setIsLoading] = useState(true);
+
+  // Keyboard Navigation & Active Row State
+  const [selectedIndex, setSelectedIndex] = useState<number>(0);
+  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
 
   // View Options
   const [showNarrations, setShowNarrations] = useState(true);
@@ -105,6 +110,7 @@ function LedgerContent() {
         const data = await res.json();
         if (data.success) {
           setLedgerData(data);
+          setSelectedIndex(0);
           // Initialize drawer fields
           setSopSteps(data.account?.sop_steps || []);
           setTriggerRules(data.account?.trigger_rules || {});
@@ -182,6 +188,60 @@ function LedgerContent() {
       );
     });
   }, [ledgerData, inLedgerSearch]);
+
+  // Keyboard Navigation Listener (Arrow Up / Down / Enter / Esc)
+  useEffect(() => {
+    if (!selectedAccountId || filteredTransactions.length === 0) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // If user is currently typing in an input or textarea, let normal typing happen
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      const isTypingInInput = activeTag === 'input' || activeTag === 'textarea';
+
+      if (editingMemoLineId) {
+        if (e.key === 'Escape') {
+          cancelEditingMemo();
+        }
+        return;
+      }
+
+      if (isTypingInInput) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIndex((prev) => {
+          const next = Math.min(filteredTransactions.length - 1, prev + 1);
+          rowRefs.current[next]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          return next;
+        });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIndex((prev) => {
+          const next = Math.max(0, prev - 1);
+          rowRefs.current[next]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          return next;
+        });
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        setSelectedIndex(0);
+        rowRefs.current[0]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        const last = filteredTransactions.length - 1;
+        setSelectedIndex(last);
+        rowRefs.current[last]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } else if (e.key === 'Enter' || e.key === 'e' || e.key === 'F2') {
+        e.preventDefault();
+        const activeTx = filteredTransactions[selectedIndex];
+        if (activeTx) {
+          startEditingMemo(activeTx.lineId, activeTx.particulars);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedAccountId, filteredTransactions, selectedIndex, editingMemoLineId]);
 
   // Filtered Directory Accounts
   const filteredDirectoryAccounts = useMemo(() => {
@@ -268,7 +328,6 @@ function LedgerContent() {
 
       const data = await res.json();
       if (data.success) {
-        // Optimistic local update
         if (ledgerData?.transactions) {
           const updatedTxs = ledgerData.transactions.map((tx: any) => {
             if (tx.lineId === lineId) {
@@ -382,12 +441,12 @@ function LedgerContent() {
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto select-none">
+    <div className="space-y-4 max-w-7xl mx-auto select-none">
       {/* ========================================================================= */}
       {/* TIER 1: LEDGER DIRECTORY & SEARCH HUB (When no accountId is active)        */}
       {/* ========================================================================= */}
       {!selectedAccountId && (
-        <div className="space-y-6">
+        <div className="space-y-5">
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -424,7 +483,7 @@ function LedgerContent() {
           </div>
 
           {/* Search & Category Filter Bar */}
-          <div className="bg-[#0f172a] border border-slate-800 p-4 rounded-2xl space-y-3 shadow-sm">
+          <div className="bg-[#0f172a] border border-slate-800 p-3.5 rounded-2xl space-y-3 shadow-sm">
             <div className="flex flex-col md:flex-row items-center gap-3">
               {/* Search Bar */}
               <div className="relative flex-1 w-full">
@@ -434,7 +493,7 @@ function LedgerContent() {
                   placeholder="Search ledgers by code, account name, tags, or taxonomy path..."
                   value={directorySearch}
                   onChange={(e) => setDirectorySearch(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
                 />
               </div>
 
@@ -460,7 +519,7 @@ function LedgerContent() {
 
           {/* Accounts Directory Table */}
           <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-            <div className="p-4 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
+            <div className="p-3.5 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
               <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
                 Active Posting Ledgers ({filteredDirectoryAccounts.length})
               </div>
@@ -473,27 +532,27 @@ function LedgerContent() {
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-950 text-slate-400 text-[11px] uppercase tracking-wider font-semibold border-b border-slate-800">
                   <tr>
-                    <th className="py-3 px-4 w-28">Code</th>
-                    <th className="py-3 px-4">Account Name</th>
-                    <th className="py-3 px-4">Primary Head</th>
-                    <th className="py-3 px-4">Hierarchy Path</th>
-                    <th className="py-3 px-4">Governance</th>
-                    <th className="py-3 px-4 text-right">Transactions</th>
-                    <th className="py-3 px-4 text-right">Current Running Balance</th>
-                    <th className="py-3 px-4 text-center">Action</th>
+                    <th className="py-2.5 px-4 w-28">Code</th>
+                    <th className="py-2.5 px-4">Account Name</th>
+                    <th className="py-2.5 px-4">Primary Head</th>
+                    <th className="py-2.5 px-4">Hierarchy Path</th>
+                    <th className="py-2.5 px-4">Governance</th>
+                    <th className="py-2.5 px-4 text-right">Transactions</th>
+                    <th className="py-2.5 px-4 text-right">Current Running Balance</th>
+                    <th className="py-2.5 px-4 text-center">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
-                  {filteredDirectoryAccounts.map((acc) => (
+                  {filteredDirectoryAccounts.map((acc, i) => (
                     <tr
                       key={acc.id}
                       onClick={() => router.push(`/ledger?accountId=${acc.id}`)}
-                      className="hover:bg-slate-850/50 cursor-pointer transition-colors group"
+                      className={`cursor-pointer transition-colors group ${i % 2 === 0 ? 'bg-[#0b1329]' : 'bg-[#0f172a]'} hover:bg-slate-850/80`}
                     >
-                      <td className="py-3 px-4 font-mono font-bold text-emerald-400">
+                      <td className="py-2.5 px-4 font-mono font-bold text-emerald-400">
                         {acc.code}
                       </td>
-                      <td className="py-3 px-4 font-semibold text-slate-100 group-hover:text-emerald-300 transition-colors">
+                      <td className="py-2.5 px-4 font-semibold text-slate-100 group-hover:text-emerald-300 transition-colors">
                         <div>{acc.name}</div>
                         {acc.tags && acc.tags.length > 0 && (
                           <div className="flex items-center gap-1 mt-1">
@@ -505,15 +564,15 @@ function LedgerContent() {
                           </div>
                         )}
                       </td>
-                      <td className="py-3 px-4">
+                      <td className="py-2.5 px-4">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getCategoryBadge(acc.type)}`}>
                           {acc.type}
                         </span>
                       </td>
-                      <td className="py-3 px-4 font-mono text-[11px] text-slate-400">
+                      <td className="py-2.5 px-4 font-mono text-[11px] text-slate-400">
                         {acc.path}
                       </td>
-                      <td className="py-3 px-4">
+                      <td className="py-2.5 px-4">
                         <div className="flex items-center gap-1.5">
                           {acc.sop_count > 0 && (
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-sky-950 text-sky-400 border border-sky-800/60">
@@ -530,10 +589,10 @@ function LedgerContent() {
                           )}
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-right font-mono text-slate-300">
+                      <td className="py-2.5 px-4 text-right font-mono text-slate-300">
                         {acc.transaction_count}
                       </td>
-                      <td className="py-3 px-4 text-right font-mono font-bold text-slate-100 whitespace-nowrap">
+                      <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-100 whitespace-nowrap">
                         <span>{formatAmount(acc.displayBalance)}</span>{' '}
                         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
                           acc.normalSide === 'Dr' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60' : 'bg-sky-950 text-sky-400 border border-sky-800/60'
@@ -541,7 +600,7 @@ function LedgerContent() {
                           {acc.normalSide}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-center">
+                      <td className="py-2.5 px-4 text-center">
                         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 group-hover:bg-emerald-600 text-slate-300 group-hover:text-white text-xs font-semibold transition-all">
                           <span>Open</span>
                           <ChevronRight className="w-3.5 h-3.5" />
@@ -565,269 +624,261 @@ function LedgerContent() {
       )}
 
       {/* ========================================================================= */}
-      {/* TIER 2: DEDICATED FOCUSED LEDGER WORKSPACE (When accountId is active)     */}
+      {/* TIER 2: ULTRA-COMPACT FOCUSED LEDGER WORKSPACE WITH KEYBOARD NAVIGATION    */}
       {/* ========================================================================= */}
       {selectedAccountId && ledgerData && ledgerData.account && (
-        <div className="space-y-6">
-          {/* Top Back & Account Header Bar */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-800">
-            <div className="space-y-1">
-              <button
-                type="button"
-                onClick={() => router.push('/ledger')}
-                className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-emerald-400 transition-colors font-medium mb-1"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>← Back to Ledger Directory</span>
-              </button>
-
+        <div className="space-y-3">
+          {/* ULTRA-COMPACT TOOLBAR (Row 1: Header + Actions | Row 2: Date + KPIs + Search) */}
+          <div className="bg-[#0f172a] border border-slate-800 p-3 rounded-2xl space-y-2.5 shadow-sm">
+            {/* Row 1: Account Title, Path, Base Currency & Action Buttons */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-slate-800/80">
               <div className="flex items-center gap-3">
-                <span className="text-xl font-bold font-mono text-emerald-400">
-                  {ledgerData.account.code}
-                </span>
-                <h1 className="text-2xl font-bold text-white tracking-tight">
-                  {ledgerData.account.name}
-                </h1>
-                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${getCategoryBadge(ledgerData.account.type)}`}>
-                  {ledgerData.account.type}
-                </span>
+                <button
+                  type="button"
+                  onClick={() => router.push('/ledger')}
+                  className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-emerald-400 transition-colors text-xs font-medium flex items-center gap-1"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>Directory</span>
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-base font-bold font-mono text-emerald-400">
+                    {ledgerData.account.code}
+                  </span>
+                  <h1 className="text-base font-bold text-white tracking-tight">
+                    {ledgerData.account.name}
+                  </h1>
+                  <span className={`px-2 py-0.2 rounded text-[10px] font-bold border ${getCategoryBadge(ledgerData.account.type)}`}>
+                    {ledgerData.account.type}
+                  </span>
+                </div>
+
+                <div className="hidden xl:flex items-center gap-2 text-[11px] text-slate-400 font-mono">
+                  <span>Path: {ledgerData.account.path}</span>
+                  <span>•</span>
+                  <span>Base: <strong className="text-slate-200">{activeCompany?.base_currency}</strong></span>
+                </div>
               </div>
 
-              <div className="flex items-center gap-3 text-xs text-slate-400 font-mono">
-                <span>Path: {ledgerData.account.path}</span>
-                <span>•</span>
-                <span>Base Currency: <strong className="text-slate-200">{activeCompany?.base_currency}</strong></span>
-                {ledgerData.account.tags && ledgerData.account.tags.length > 0 && (
-                  <>
-                    <span>•</span>
-                    <div className="flex items-center gap-1">
-                      {ledgerData.account.tags.map((t: string) => (
-                        <span key={t} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px]">
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  </>
-                )}
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDrawer(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-bold border border-slate-700 shadow-sm transition-all"
+                  title="Open SOP, Triggers & Rules Drawer"
+                >
+                  <Settings className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Action & Info Hub</span>
+                  {(ledgerData.account.sop_steps?.length > 0 || Object.keys(ledgerData.account.trigger_rules || {}).length > 0) && (
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExportCSV}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print</span>
+                </button>
+
+                <Link
+                  href="/vouchers/new"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-700/20 transition-all"
+                >
+                  <PlusCircle className="w-3.5 h-3.5" />
+                  <span>+ Voucher</span>
+                </Link>
               </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="flex items-center gap-2.5 self-start md:self-auto">
-              <button
-                type="button"
-                onClick={() => setShowDrawer(true)}
-                className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-bold border border-slate-700 shadow-sm transition-all"
-                title="Open SOP, Triggers & Rules Drawer"
-              >
-                <Settings className="w-4 h-4 text-amber-400" />
-                <span>Action & Info Hub</span>
-                {(ledgerData.account.sop_steps?.length > 0 || Object.keys(ledgerData.account.trigger_rules || {}).length > 0) && (
-                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                )}
-              </button>
+            {/* Row 2: Compact Date Filters, Search Input & High-Density Inline KPIs */}
+            <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+              {/* Left: Presets & Dates */}
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-0.5 bg-slate-900 p-0.5 rounded-lg border border-slate-800">
+                  {[
+                    { id: 'ALL', label: 'All Time' },
+                    { id: 'THIS_MONTH', label: 'Month' },
+                    { id: 'LAST_MONTH', label: 'Last' },
+                    { id: 'THIS_FY', label: 'This FY' },
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => handleApplyPreset(p.id as any)}
+                      className={`px-2 py-1 rounded text-[11px] font-bold transition-all ${
+                        activePreset === p.id
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
 
-              <button
-                type="button"
-                onClick={handleExportCSV}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Export CSV</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Print</span>
-              </button>
-
-              <Link
-                href="/vouchers/new"
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-700/20 transition-all"
-              >
-                <PlusCircle className="w-4 h-4" />
-                <span>New Voucher</span>
-              </Link>
-            </div>
-          </div>
-
-          {/* Compact Period Selector Bar & KPI Strip */}
-          <div className="bg-[#0f172a] border border-slate-800 p-4 rounded-2xl space-y-4 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-4 text-xs">
-              {/* Presets */}
-              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
-                {[
-                  { id: 'ALL', label: 'All Time' },
-                  { id: 'THIS_MONTH', label: 'This Month' },
-                  { id: 'LAST_MONTH', label: 'Last Month' },
-                  { id: 'THIS_FY', label: 'This FY' },
-                ].map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => handleApplyPreset(p.id as any)}
-                    className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
-                      activePreset === p.id
-                        ? 'bg-emerald-600 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Custom Date Pickers */}
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 text-slate-300">
-                  <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>From:</span>
+                <div className="flex items-center gap-1.5 text-slate-400 text-[11px]">
                   <input
                     type="date"
                     value={startDate}
                     onChange={(e) => { setStartDate(e.target.value); setActivePreset('ALL'); }}
-                    className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                    className="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-white font-mono"
                   />
-                </div>
-                <div className="flex items-center gap-2 text-slate-300">
-                  <span>To:</span>
+                  <span>to</span>
                   <input
                     type="date"
                     value={endDate}
                     onChange={(e) => { setEndDate(e.target.value); setActivePreset('ALL'); }}
-                    className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                    className="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-white font-mono"
                   />
+                </div>
+              </div>
+
+              {/* Center: Live In-Ledger Search */}
+              <div className="relative flex-1 min-w-[200px] max-w-xs">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search in ledger (memo, contra, tag)..."
+                  value={inLedgerSearch}
+                  onChange={(e) => setInLedgerSearch(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-8 pr-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {/* Right: High-Density Inline KPIs */}
+              <div className="flex items-center gap-2 font-mono text-[11px]">
+                <div className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300">
+                  <span className="text-slate-500 mr-1">Op:</span>
+                  <strong>{formatAmount(ledgerData.totals.openingBalance)} {ledgerData.totals.openingSide}</strong>
+                </div>
+
+                <div className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-emerald-400">
+                  <span className="text-slate-500 mr-1">Dr:</span>
+                  <strong>{formatAmount(ledgerData.totals.periodDebits)}</strong>
+                </div>
+
+                <div className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-sky-400">
+                  <span className="text-slate-500 mr-1">Cr:</span>
+                  <strong>{formatAmount(ledgerData.totals.periodCredits)}</strong>
+                </div>
+
+                <div className="px-2.5 py-1 rounded bg-emerald-950/80 border border-emerald-700 text-emerald-300 font-bold shadow-sm">
+                  <span className="text-emerald-400/70 mr-1">Closing:</span>
+                  <span>{formatAmount(ledgerData.totals.closingBalance)} {ledgerData.totals.closingSide}</span>
                 </div>
               </div>
             </div>
 
-            {/* KPI Summary Strip */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-3 border-t border-slate-800 text-xs">
-              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-                <span className="text-[10px] text-slate-400 uppercase font-semibold block">Opening Balance</span>
-                <strong className="text-slate-200 font-mono text-sm block mt-0.5">
-                  {formatAmount(ledgerData.totals.openingBalance)} {ledgerData.totals.openingSide}
-                </strong>
+            {/* Row 3: Ultra-slim Toggles & Keyboard Navigation Hints */}
+            <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-800/60">
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-1.5 cursor-pointer hover:text-white">
+                  <input
+                    type="checkbox"
+                    checked={showNarrations}
+                    onChange={(e) => setShowNarrations(e.target.checked)}
+                    className="rounded text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5"
+                  />
+                  <span>Show Narrations & Memos</span>
+                </label>
+
+                <label className="flex items-center gap-1.5 cursor-pointer hover:text-white">
+                  <input
+                    type="checkbox"
+                    checked={showForeignCurrencies}
+                    onChange={(e) => setShowForeignCurrencies(e.target.checked)}
+                    className="rounded text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5"
+                  />
+                  <span>Show Forex</span>
+                </label>
+
+                <span>• {filteredTransactions.length} rows loaded</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-                <span className="text-[10px] text-emerald-400 uppercase font-semibold block">Period Debits (DR)</span>
-                <strong className="text-emerald-300 font-mono text-sm block mt-0.5">
-                  {formatAmount(ledgerData.totals.periodDebits)}
-                </strong>
-              </div>
-
-              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-                <span className="text-[10px] text-sky-400 uppercase font-semibold block">Period Credits (CR)</span>
-                <strong className="text-sky-300 font-mono text-sm block mt-0.5">
-                  {formatAmount(ledgerData.totals.periodCredits)}
-                </strong>
-              </div>
-
-              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-                <span className="text-[10px] text-slate-400 uppercase font-semibold block">Net Movement</span>
-                <strong className="text-slate-200 font-mono text-sm block mt-0.5">
-                  {formatAmount(ledgerData.totals.netMovement)}
-                </strong>
-              </div>
-
-              <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-700/60 col-span-2 sm:col-span-1 shadow-sm">
-                <span className="text-[10px] text-emerald-300 uppercase font-bold block">Closing Balance</span>
-                <strong className="text-emerald-400 font-mono text-base block mt-0.5">
-                  {formatAmount(ledgerData.totals.closingBalance)} {ledgerData.totals.closingSide}
-                </strong>
+              {/* Keyboard Shortcuts Hint */}
+              <div className="hidden md:flex items-center gap-2 text-slate-400">
+                <Keyboard className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Navigate: <kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono">↑</kbd> <kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono">↓</kbd></span>
+                <span>•</span>
+                <span>Edit Narration: <kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono">Enter</kbd></span>
+                <span>•</span>
+                <span>Cancel: <kbd className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 font-mono">Esc</kbd></span>
               </div>
             </div>
           </div>
 
-          {/* Quick In-Ledger Search & Display Toggles Bar */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#0f172a] border border-slate-800 p-3.5 rounded-2xl text-xs shadow-sm">
-            {/* In-Ledger Search Input */}
-            <div className="relative flex-1 max-w-md">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Search transactions: memo, counter ledger, voucher #, tag, amount..."
-                value={inLedgerSearch}
-                onChange={(e) => setInLedgerSearch(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-              />
-            </div>
-
-            {/* View Toggles */}
-            <div className="flex items-center gap-4 text-slate-300">
-              <label className="flex items-center gap-2 cursor-pointer hover:text-white">
-                <input
-                  type="checkbox"
-                  checked={showNarrations}
-                  onChange={(e) => setShowNarrations(e.target.checked)}
-                  className="rounded text-emerald-600 focus:ring-emerald-500"
-                />
-                <span>Show Narrations & Memos</span>
-              </label>
-
-              <label className="flex items-center gap-2 cursor-pointer hover:text-white">
-                <input
-                  type="checkbox"
-                  checked={showForeignCurrencies}
-                  onChange={(e) => setShowForeignCurrencies(e.target.checked)}
-                  className="rounded text-emerald-600 focus:ring-emerald-500"
-                />
-                <span>Show Forex</span>
-              </label>
-
-              <span className="text-slate-500 font-mono text-[11px]">
-                {filteredTransactions.length} of {ledgerData.transactions.length} rows
-              </span>
-            </div>
-          </div>
-
-          {/* Chronological Postings Grid (Tally-Inspired Clean Layout) */}
+          {/* CHRONOLOGICAL POSTINGS GRID (Two-Shade Row Separation + Full Keyboard Navigation) */}
           <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-950 text-slate-400 text-[11px] uppercase tracking-wider font-semibold border-b border-slate-800">
                   <tr>
-                    <th className="py-3 px-4 w-28">Date</th>
-                    <th className="py-3 px-4 w-32">Voucher No</th>
-                    <th className="py-3 px-4">Particulars (Counter Ledger)</th>
-                    {showForeignCurrencies && <th className="py-3 px-4 text-right w-32">Forex Amount</th>}
-                    <th className="py-3 px-4 w-28">Tags (#)</th>
-                    <th className="py-3 px-4 text-right w-32">Debit (DR)</th>
-                    <th className="py-3 px-4 text-right w-32">Credit (CR)</th>
-                    <th className="py-3 px-4 text-right w-36">Cumulative Balance</th>
+                    <th className="py-2.5 px-4 w-28">Date</th>
+                    <th className="py-2.5 px-4 w-32">Voucher No</th>
+                    <th className="py-2.5 px-4">Particulars (Counter Ledger)</th>
+                    {showForeignCurrencies && <th className="py-2.5 px-4 text-right w-32">Forex Amount</th>}
+                    <th className="py-2.5 px-4 w-28">Tags (#)</th>
+                    <th className="py-2.5 px-4 text-right w-32">Debit (DR)</th>
+                    <th className="py-2.5 px-4 text-right w-32">Credit (CR)</th>
+                    <th className="py-2.5 px-4 text-right w-36">Cumulative Balance</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/60">
+                <tbody className="divide-y divide-slate-800/40">
                   {/* Opening Balance Row */}
                   <tr className="bg-slate-900/60 font-semibold text-slate-300">
-                    <td className="py-2.5 px-4 font-mono text-slate-400">{startDate || '—'}</td>
-                    <td className="py-2.5 px-4 font-mono text-slate-500">OPENING-BAL</td>
-                    <td className="py-2.5 px-4 italic text-slate-400">Opening Balance Brought Forward</td>
-                    {showForeignCurrencies && <td className="py-2.5 px-4 text-right font-mono text-slate-500">—</td>}
-                    <td className="py-2.5 px-4 font-mono text-slate-500">—</td>
-                    <td className="py-2.5 px-4 text-right font-mono text-slate-500">—</td>
-                    <td className="py-2.5 px-4 text-right font-mono text-slate-500">—</td>
-                    <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-200">
+                    <td className="py-2 px-4 font-mono text-slate-400">{startDate || '—'}</td>
+                    <td className="py-2 px-4 font-mono text-slate-500">OPENING-BAL</td>
+                    <td className="py-2 px-4 italic text-slate-400">Opening Balance Brought Forward</td>
+                    {showForeignCurrencies && <td className="py-2 px-4 text-right font-mono text-slate-500">—</td>}
+                    <td className="py-2 px-4 font-mono text-slate-500">—</td>
+                    <td className="py-2 px-4 text-right font-mono text-slate-500">—</td>
+                    <td className="py-2 px-4 text-right font-mono text-slate-500">—</td>
+                    <td className="py-2 px-4 text-right font-mono font-bold text-slate-200">
                       {formatAmount(ledgerData.totals.openingBalance)} {ledgerData.totals.openingSide}
                     </td>
                   </tr>
 
-                  {/* Transaction Rows */}
-                  {filteredTransactions.map((tx: any) => {
+                  {/* Transaction Rows with Two-Shade Alternation & Keyboard Focus */}
+                  {filteredTransactions.map((tx: any, idx: number) => {
+                    const isSelected = selectedIndex === idx;
                     const isEditingThisMemo = editingMemoLineId === tx.lineId;
+                    const isEvenRow = idx % 2 === 0;
+
+                    // Alternating background shades
+                    const rowBgClass = isSelected
+                      ? 'bg-emerald-950/40 ring-1 ring-emerald-500/80 shadow-md'
+                      : isEvenRow
+                      ? 'bg-[#0b1329]'
+                      : 'bg-[#111a33]';
 
                     return (
                       <React.Fragment key={tx.lineId}>
                         {/* 1. Primary Financial Row */}
-                        <tr className={`hover:bg-slate-850/50 transition-colors group ${showNarrations ? 'border-b-0' : ''}`}>
-                          {/* Date */}
+                        <tr
+                          ref={(el) => { rowRefs.current[idx] = el; }}
+                          onClick={() => setSelectedIndex(idx)}
+                          className={`cursor-pointer transition-all ${rowBgClass} hover:bg-slate-850/80`}
+                        >
+                          {/* Date with active cursor indicator */}
                           <td className="py-2.5 px-4 font-mono text-slate-300 whitespace-nowrap">
-                            {tx.entryDate}
+                            <div className="flex items-center gap-1.5">
+                              {isSelected && <span className="text-emerald-400 font-bold text-[10px]">▶</span>}
+                              <span>{tx.entryDate}</span>
+                            </div>
                           </td>
 
                           {/* Voucher Number */}
@@ -913,9 +964,12 @@ function LedgerContent() {
                           </td>
                         </tr>
 
-                        {/* 2. Spanned Dedicated Narration Sub-Row (Tally-Style Horizontal Narration) */}
+                        {/* 2. Spanned Dedicated Narration Sub-Row */}
                         {showNarrations && (
-                          <tr className="bg-slate-950/40 text-slate-400 border-b border-slate-850 hover:bg-slate-900/40 transition-colors">
+                          <tr
+                            onClick={() => setSelectedIndex(idx)}
+                            className={`border-b border-slate-800/80 transition-colors ${rowBgClass}`}
+                          >
                             <td colSpan={showForeignCurrencies ? 8 : 7} className="py-1.5 px-4 pl-12 text-[11px]">
                               {isEditingThisMemo ? (
                                 <div className="flex items-center gap-2 py-1 max-w-2xl animate-in fade-in duration-150">
@@ -966,7 +1020,7 @@ function LedgerContent() {
                                     type="button"
                                     onClick={() => startEditingMemo(tx.lineId, tx.particulars)}
                                     className="opacity-0 group-hover/memo:opacity-100 flex items-center gap-1 text-[10px] text-slate-400 hover:text-emerald-400 px-2 py-0.5 rounded hover:bg-slate-800 transition-all shrink-0 font-medium not-italic"
-                                    title="Edit Narration / Memo"
+                                    title="Edit Narration / Memo (Press Enter or click)"
                                   >
                                     <Edit2 className="w-3 h-3" />
                                     <span>Edit</span>
