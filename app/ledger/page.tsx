@@ -6,6 +6,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { useCompany } from '@/components/context/company-context';
 import { CreateLedgerModal } from '@/components/accounts/create-ledger-modal';
 import { BankImportModal } from '@/components/accounts/bank-import-modal';
+import { BankReconciliationView } from '@/components/accounts/bank-reconciliation-view';
 import { 
   BookOpen, 
   Search, 
@@ -61,7 +62,7 @@ function LedgerContent() {
   const [inLedgerSearch, setInLedgerSearch] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [selectedTag, setSelectedTag] = useState('');
+  const [selectedTag, setSelectedTag] = useState<string>('');
   const [activePreset, setActivePreset] = useState<'ALL' | 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_FY'>('ALL');
   const [isLoading, setIsLoading] = useState(true);
 
@@ -83,7 +84,7 @@ function LedgerContent() {
 
   // Action & Info Hub Drawer State
   const [showDrawer, setShowDrawer] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<'SOP' | 'TRIGGERS' | 'TAGS' | 'VIEW'>('SOP');
+  const [drawerTab, setDrawerTab] = useState<'SOP' | 'TRIGGERS' | 'TAGS' | 'VIEW' | 'BRS'>('SOP');
   const [isSavingGovernance, setIsSavingGovernance] = useState(false);
   const [drawerSuccessMsg, setDrawerSuccessMsg] = useState<string | null>(null);
 
@@ -743,6 +744,22 @@ function LedgerContent() {
                   )}
                 </button>
 
+                {/* Direct BRS Reconciliation Button for Bank / Cash Accounts */}
+                {(ledgerData.account.type === 'ASSET' || ledgerData.account.tags?.includes('#Bank') || ledgerData.account.code?.startsWith('11')) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDrawerTab('BRS');
+                      setShowDrawer(true);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-950/80 hover:bg-sky-900 text-sky-300 text-xs font-bold border border-sky-800/60 shadow-sm transition-all"
+                    title="Open Bank Reconciliation Statement (BRS) to match clearances and unpresented cheques"
+                  >
+                    <Building2 className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Reconcile (BRS)</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => setShowBankImportModal(true)}
@@ -1335,7 +1352,7 @@ function LedgerContent() {
       {/* ========================================================================= */}
       {showDrawer && ledgerData?.account && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex justify-end">
-          <div className="w-full max-w-xl bg-slate-900 border-l border-slate-800 h-full flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-right duration-200">
+          <div className="w-full max-w-3xl bg-slate-900 border-l border-slate-800 h-full flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-right duration-200">
             {/* Drawer Header */}
             <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
               <div className="flex items-center gap-3">
@@ -1362,12 +1379,15 @@ function LedgerContent() {
             </div>
 
             {/* Drawer Navigation Tabs */}
-            <div className="flex border-b border-slate-800 bg-slate-900/90 text-xs">
+            <div className="flex border-b border-slate-800 bg-slate-900/90 text-xs overflow-x-auto">
               {[
                 { id: 'SOP', label: 'SOP & Workflow', icon: Sparkles },
                 { id: 'TRIGGERS', label: 'Scrutiny Triggers', icon: AlertCircle },
                 { id: 'TAGS', label: 'Tags & Notes', icon: Tag },
-                { id: 'VIEW', label: 'View & Print Options', icon: SlidersHorizontal },
+                { id: 'VIEW', label: 'View & Print', icon: SlidersHorizontal },
+                ...(ledgerData.account.type === 'ASSET' || ledgerData.account.tags?.includes('#Bank') || ledgerData.account.code?.startsWith('11')
+                  ? [{ id: 'BRS', label: 'Reconciliation (BRS)', icon: Building2 }]
+                  : []),
               ].map((tab) => {
                 const Icon = tab.icon;
                 const isActive = drawerTab === tab.id;
@@ -1376,7 +1396,7 @@ function LedgerContent() {
                     key={tab.id}
                     type="button"
                     onClick={() => setDrawerTab(tab.id as any)}
-                    className={`flex-1 py-3 px-3 flex items-center justify-center gap-1.5 font-bold transition-all border-b-2 ${
+                    className={`py-3 px-3.5 flex items-center justify-center gap-1.5 font-bold transition-all border-b-2 whitespace-nowrap ${
                       isActive
                         ? 'border-emerald-500 text-emerald-400 bg-emerald-950/20'
                         : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -1618,6 +1638,16 @@ function LedgerContent() {
                   </div>
                 </div>
               )}
+
+              {/* TAB 5: BANK RECONCILIATION STATEMENT (BRS) */}
+              {drawerTab === 'BRS' && (
+                <BankReconciliationView
+                  accountId={ledgerData.account.id}
+                  onReconciliationComplete={() => {
+                    fetchData();
+                  }}
+                />
+              )}
             </div>
 
             {/* Drawer Footer */}
@@ -1630,14 +1660,16 @@ function LedgerContent() {
                 Close
               </button>
 
-              <button
-                type="button"
-                onClick={handleSaveGovernance}
-                disabled={isSavingGovernance}
-                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-700/20 transition-all disabled:opacity-50"
-              >
-                {isSavingGovernance ? 'Saving Changes...' : 'Save Governance Parameters'}
-              </button>
+              {drawerTab !== 'BRS' && (
+                <button
+                  type="button"
+                  onClick={handleSaveGovernance}
+                  disabled={isSavingGovernance}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-700/20 transition-all disabled:opacity-50"
+                >
+                  {isSavingGovernance ? 'Saving Changes...' : 'Save Governance Parameters'}
+                </button>
+              )}
             </div>
           </div>
         </div>

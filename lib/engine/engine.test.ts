@@ -6,6 +6,7 @@ import { validateJournalEntry, postJournalEntry, createMirrorReversal } from './
 import { generateFxSettlementLines, getExchangeRate } from './multi-currency';
 import { getHierarchicalCoa, flattenCoaTree } from './coa-tree';
 import { generateBankImportTemplate, validateBankImportContent, executeBankImportBatch } from './bank-import';
+import { getBankReconciliationData, updateLineClearance, finalizeBankReconciliation } from './reconciliation';
 
 describe('Flowbook Double-Entry & Multi-Currency Engine Tests', () => {
   let company: Company;
@@ -356,5 +357,45 @@ Date,Reference,Counter_Ledger,Narration,Amount,Tags
     assert.ok(auditEvt);
     assert.strictEqual(auditEvt.actor, 'Test Auditor');
     assert.ok(auditEvt.description.includes('2026-02-22'));
+  });
+
+  test('Bank Reconciliation Statement (BRS): Formula Proof, Timing Differences & Line Clearance Matching', () => {
+    const db = getDb();
+    const bankAccId = 'acc_1110';
+
+    // 1. Fetch initial BRS data
+    const brsData = getBankReconciliationData(company.id, bankAccId, '2026-03-31', 300000);
+    assert.ok(brsData);
+    assert.ok(brsData.transactions.length > 0, 'Should have bank transactions');
+    assert.strictEqual(typeof brsData.bookBalance, 'number');
+    assert.strictEqual(typeof brsData.reconciledBankBalance, 'number');
+
+    // 2. Test updating a line clearance
+    const targetLine = brsData.transactions[0];
+    updateLineClearance(targetLine.lineId, true, '2026-03-05');
+
+    const updatedLine = db.prepare('SELECT is_bank_cleared, bank_cleared_date FROM journal_lines WHERE id = ?').get(targetLine.lineId) as any;
+    assert.strictEqual(updatedLine.is_bank_cleared, 1);
+    assert.strictEqual(updatedLine.bank_cleared_date, '2026-03-05');
+
+    // 3. Test finalizing and locking BRS
+    const finalizeRes = finalizeBankReconciliation(company.id, bankAccId, '2026-03-31', 350000, 'Senior Auditor');
+    assert.strictEqual(finalizeRes.success, true);
+    assert.strictEqual(finalizeRes.newReconciledDate, '2026-03-31');
+
+    const updatedAcc = db.prepare('SELECT last_reconciled_date, last_reconciled_balance FROM accounts WHERE id = ?').get(bankAccId) as any;
+    assert.strictEqual(updatedAcc.last_reconciled_date, '2026-03-31');
+    assert.strictEqual(updatedAcc.last_reconciled_balance, 350000);
+
+    // 4. Verify audit event
+    const auditEvt = db.prepare(`
+      SELECT * FROM audit_events 
+      WHERE company_id = ? AND event_type = 'BANK_RECONCILIATION_FINALIZED'
+      ORDER BY created_at DESC LIMIT 1
+    `).get(company.id) as any;
+
+    assert.ok(auditEvt);
+    assert.strictEqual(auditEvt.actor, 'Senior Auditor');
+    assert.ok(auditEvt.description.includes('2026-03-31'));
   });
 });

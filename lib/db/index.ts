@@ -136,6 +136,8 @@ function initSchemaAndSeed(db: DatabaseSync) {
       amount REAL NOT NULL,
       memo TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
+      bank_cleared_date TEXT,
+      is_bank_cleared INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
 
@@ -207,6 +209,8 @@ function initSchemaAndSeed(db: DatabaseSync) {
   try { db.exec(`ALTER TABLE accounts ADD COLUMN trigger_rules TEXT NOT NULL DEFAULT '{}';`); } catch {}
   try { db.exec(`ALTER TABLE accounts ADD COLUMN last_reconciled_date TEXT;`); } catch {}
   try { db.exec(`ALTER TABLE accounts ADD COLUMN last_reconciled_balance REAL;`); } catch {}
+  try { db.exec(`ALTER TABLE journal_lines ADD COLUMN bank_cleared_date TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE journal_lines ADD COLUMN is_bank_cleared INTEGER NOT NULL DEFAULT 0;`); } catch {}
 
   seedInitialData(db);
 }

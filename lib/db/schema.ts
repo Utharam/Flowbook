@@ -24,7 +24,8 @@ export type AuditEventType =
   | 'OFFICER_ALTERED'
   | 'CAP_TABLE_ALTERED'
   | 'LEDGER_GOVERNANCE_UPDATED'
-  | 'BANK_STATEMENT_BATCH_IMPORTED';
+  | 'BANK_STATEMENT_BATCH_IMPORTED'
+  | 'BANK_RECONCILIATION_FINALIZED';
 
 export interface Company {
   id: string;
@@ -126,6 +127,8 @@ export interface JournalLine {
   amount: number; // Single-column signed amount in base currency: Debit = -, Credit = +
   memo?: string;
   tags: string; // JSON array of strings e.g. '["#1206", "#HQ"]'
+  bank_cleared_date?: string; // YYYY-MM-DD
+  is_bank_cleared?: number; // 1 = Cleared in bank, 0 = Pending/Unpresented
   created_at: string;
 }
 
