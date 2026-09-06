@@ -125,7 +125,7 @@ export function generateBankImportTemplate(
     if (priorTxs.length > 0) {
       priorTxLines = [
         `# LAST RECONCILED TRANSACTIONS (FOR AUDIT REFERENCE AS ON ${reconciledDate}):`,
-        ...priorTxs.map(t => `#   • ${t.entry_date} | ${t.entry_number} | Counter: ${t.counter_code} ${t.counter_name} | Amount: ${t.amount > 0 ? `+${t.amount.toFixed(2)}` : t.amount.toFixed(2)} | Memo: ${t.memo || 'N/A'}`),
+        ...priorTxs.map(t => `#   - ${t.entry_date} | ${t.entry_number} | Counter: ${t.counter_code} ${t.counter_name} | Amount: ${t.amount > 0 ? `+${t.amount.toFixed(2)}` : t.amount.toFixed(2)} | Memo: ${t.memo || 'N/A'}`),
         `# `
       ];
     }
@@ -142,18 +142,19 @@ export function generateBankImportTemplate(
     `# `,
     ...priorTxLines,
     `# RULES & INSTRUCTIONS:`,
-    `# 1. Transaction Date must be strictly after ${reconciledDate} (e.g. ${nextYear}-${nextMonth}-01 onwards).`,
-    `# 2. Counter_Ledger can be either the Account Code (e.g. 5200) or exact Account Name (e.g. Office Rent).`,
+    `# 1. Transaction Date must be strictly after ${reconciledDate}. Accepted formats: YYYY-MM-DD or DD-MM-YYYY.`,
+    `# 2. Counter_Ledger can be either Account Code (e.g. 5200) or exact Account Name (e.g. Office Rent).`,
     `# 3. Amount: Positive (+) for Inflows / Deposits; Negative (-) for Outflows / Withdrawals / Charges.`,
     `# 4. Tags: Space or comma separated tags starting with # (e.g. #Vendor #HQ).`,
+    `# `,
+    `# SAMPLE FORMAT REFERENCE:`,
+    `#   - Inflow Sample:  ${nextYear}-${nextMonth}-05, NEFT-889102, 4100, Customer Consulting Receipt, 15000.00, #Sales`,
+    `#   - Outflow Sample: ${nextYear}-${nextMonth}-12, CHQ-10029,  5200, Corporate Office Facilities,   -3200.00, #Facilities`,
     `# =========================================================================================`,
-    `Date,Bank_Reference_UTR,Counter_Ledger,Particulars_Narration,Amount,Tags`,
-    `${nextYear}-${nextMonth}-05,NEFT-889102,4100,Direct Customer Inflow for Advisory Services,15000.00,#Sales`,
-    `${nextYear}-${nextMonth}-12,CHQ-10029,5200,Corporate Office Facilities & Maintenance Payment,-3200.00,#Facilities`,
-    `${nextYear}-${nextMonth}-20,UPI-394810,5400,Production Cloud Infrastructure & Compute Bill,-1250.00,#Cloud`
+    `Date,Bank_Reference_UTR,Counter_Ledger,Particulars_Narration,Amount,Tags`
   ];
 
-  return lines.join('\n');
+  return '\uFEFF' + lines.join('\n') + '\n';
 }
 
 /**
