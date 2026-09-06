@@ -40,6 +40,50 @@ export interface BankImportValidationResult {
 }
 
 /**
+ * Helper to normalize dates across YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY, and YYYY/MM/DD
+ */
+export function normalizeDateString(rawDate: string): string | null {
+  if (!rawDate) return null;
+  const clean = rawDate.trim();
+
+  // 1. Standard ISO: YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    return clean;
+  }
+
+  // 2. Slash ISO: YYYY/MM/DD
+  if (/^\d{4}\/\d{2}\/\d{2}$/.test(clean)) {
+    return clean.replace(/\//g, '-');
+  }
+
+  // 3. Indian / British / Excel format: DD-MM-YYYY
+  const ddmmyyyyDash = /^(\d{1,2})-(\d{1,2})-(\d{4})$/.exec(clean);
+  if (ddmmyyyyDash) {
+    const day = ddmmyyyyDash[1].padStart(2, '0');
+    const month = ddmmyyyyDash[2].padStart(2, '0');
+    const year = ddmmyyyyDash[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // 4. Slash format: DD/MM/YYYY
+  const ddmmyyyySlash = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(clean);
+  if (ddmmyyyySlash) {
+    const day = ddmmyyyySlash[1].padStart(2, '0');
+    const month = ddmmyyyySlash[2].padStart(2, '0');
+    const year = ddmmyyyySlash[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // 5. Fallback Date parse
+  const parsed = Date.parse(clean);
+  if (!isNaN(parsed)) {
+    return new Date(parsed).toISOString().substring(0, 10);
+  }
+
+  return null;
+}
+
+/**
  * 1. Generate Pre-formatted Bank Statement Import CSV Template
  */
 export function generateBankImportTemplate(
@@ -47,8 +91,45 @@ export function generateBankImportTemplate(
   account: Account,
   currentOpeningBalance: number
 ): string {
+  const db = getDb();
   const reconciledDate = account.last_reconciled_date || '2026-01-31';
   const balanceSide = account.type === 'ASSET' ? 'Dr' : 'Cr';
+
+  // Calculate next month for dynamic valid sample rows
+  let nextYear = 2026;
+  let nextMonth = '09';
+  try {
+    const parsedDate = new Date(reconciledDate);
+    if (!isNaN(parsedDate.getTime())) {
+      parsedDate.setDate(1);
+      parsedDate.setMonth(parsedDate.getMonth() + 1);
+      nextYear = parsedDate.getFullYear();
+      nextMonth = String(parsedDate.getMonth() + 1).padStart(2, '0');
+    }
+  } catch {}
+
+  // Fetch last 2 prior reconciled transactions for reference
+  let priorTxLines: string[] = [];
+  try {
+    const priorTxs = db.prepare(`
+      SELECT je.entry_number, je.entry_date, jl.amount, jl.memo, a.code as counter_code, a.name as counter_name
+      FROM journal_lines jl
+      JOIN journal_entries je ON jl.entry_id = je.id
+      JOIN journal_lines jl_other ON jl_other.entry_id = je.id AND jl_other.account_id != jl.account_id
+      JOIN accounts a ON jl_other.account_id = a.id
+      WHERE je.company_id = ? AND jl.account_id = ? AND je.status = 'POSTED' AND je.entry_date <= ?
+      ORDER BY je.entry_date DESC, je.entry_number DESC
+      LIMIT 2
+    `).all(company.id, account.id, reconciledDate) as any[];
+
+    if (priorTxs.length > 0) {
+      priorTxLines = [
+        `# LAST RECONCILED TRANSACTIONS (FOR AUDIT REFERENCE AS ON ${reconciledDate}):`,
+        ...priorTxs.map(t => `#   • ${t.entry_date} | ${t.entry_number} | Counter: ${t.counter_code} ${t.counter_name} | Amount: ${t.amount > 0 ? `+${t.amount.toFixed(2)}` : t.amount.toFixed(2)} | Memo: ${t.memo || 'N/A'}`),
+        `# `
+      ];
+    }
+  } catch {}
 
   const lines = [
     `# =========================================================================================`,
@@ -59,16 +140,17 @@ export function generateBankImportTemplate(
     `# OPENING_RECONCILED_BALANCE: ${currentOpeningBalance.toFixed(company.decimal_places)} ${balanceSide}`,
     `# TARGET_STATEMENT_CLOSING_BALANCE: [ENTER_YOUR_BANK_STATEMENT_ENDING_BALANCE_HERE]`,
     `# `,
+    ...priorTxLines,
     `# RULES & INSTRUCTIONS:`,
-    `# 1. Transaction Date must be in YYYY-MM-DD format and strictly after ${reconciledDate}.`,
+    `# 1. Transaction Date must be strictly after ${reconciledDate} (e.g. ${nextYear}-${nextMonth}-01 onwards).`,
     `# 2. Counter_Ledger can be either the Account Code (e.g. 5200) or exact Account Name (e.g. Office Rent).`,
     `# 3. Amount: Positive (+) for Inflows / Deposits; Negative (-) for Outflows / Withdrawals / Charges.`,
     `# 4. Tags: Space or comma separated tags starting with # (e.g. #Vendor #HQ).`,
     `# =========================================================================================`,
     `Date,Bank_Reference_UTR,Counter_Ledger,Particulars_Narration,Amount,Tags`,
-    `2026-02-05,NEFT-889102,4100,Direct Customer Inflow for Advisory Services,15000.00,#Sales`,
-    `2026-02-12,CHQ-10029,5200,Corporate Office Facilities & Maintenance Payment,-3200.00,#Facilities`,
-    `2026-02-20,UPI-394810,5400,Production Cloud Infrastructure & Compute Bill,-1250.00,#Cloud`
+    `${nextYear}-${nextMonth}-05,NEFT-889102,4100,Direct Customer Inflow for Advisory Services,15000.00,#Sales`,
+    `${nextYear}-${nextMonth}-12,CHQ-10029,5200,Corporate Office Facilities & Maintenance Payment,-3200.00,#Facilities`,
+    `${nextYear}-${nextMonth}-20,UPI-394810,5400,Production Cloud Infrastructure & Compute Bill,-1250.00,#Cloud`
   ];
 
   return lines.join('\n');
@@ -211,14 +293,14 @@ export function validateBankImportContent(
 
     let rowError: string | undefined;
 
-    // 1. Validate Date format (YYYY-MM-DD)
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if (!dateRegex.test(rowDate) || isNaN(Date.parse(rowDate))) {
-      rowError = `Invalid date format "${rowDate}". Must be YYYY-MM-DD.`;
+    // 1. Validate & Normalize Date (accepts YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY)
+    const normalizedDate = normalizeDateString(rowDate);
+    if (!normalizedDate) {
+      rowError = `Invalid date format "${rowDate}". Accepted: YYYY-MM-DD or DD-MM-YYYY.`;
       errors.push(`Row ${lineNum}: ${rowError}`);
-    } else if (lastReconciled && rowDate <= lastReconciled) {
+    } else if (lastReconciled && normalizedDate <= lastReconciled) {
       // 2. Validate Reconciled Date Barrier
-      rowError = `Date ${rowDate} is on or before the last reconciled closing date (${lastReconciled}). Backdating is prohibited.`;
+      rowError = `Date ${normalizedDate} is on or before the last reconciled closing date (${lastReconciled}). Backdating is prohibited.`;
       errors.push(`Row ${lineNum}: ${rowError}`);
     }
 
@@ -278,7 +360,7 @@ export function validateBankImportContent(
 
     parsedRows.push({
       rowNumber: lineNum,
-      date: rowDate,
+      date: normalizedDate || rowDate,
       reference: rowRef,
       counterAccountId: matchedAccount?.id,
       counterAccountCode: matchedAccount?.code,
