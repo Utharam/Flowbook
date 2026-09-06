@@ -16,7 +16,10 @@ import {
   ArrowRight,
   Filter,
   Layers,
-  HelpCircle
+  HelpCircle,
+  CheckSquare2,
+  Square,
+  Clock
 } from 'lucide-react';
 import { useCompany } from '@/components/context/company-context';
 import { BankReconciliationData, BrsTransactionRow } from '@/lib/engine/reconciliation';
@@ -32,7 +35,6 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
   // As of Date & Statement Balance Inputs
   const [asOfDate, setAsOfDate] = useState<string>(() => {
     const now = new Date();
-    // Default to last day of current month
     return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().substring(0, 10);
   });
   const [statementBalanceInput, setStatementBalanceInput] = useState<string>('');
@@ -56,10 +58,6 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
       const json = await res.json();
       if (json.success) {
         setData(json);
-        if (statementBalanceInput === '' && json.account?.last_reconciled_balance !== undefined && json.account?.last_reconciled_balance !== null) {
-          // Pre-populate if empty
-          // setStatementBalanceInput(json.account.last_reconciled_balance.toString());
-        }
       }
     } catch (err) {
       console.error('Failed to load BRS data:', err);
@@ -72,54 +70,99 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
     fetchBrsData();
   }, [activeCompanyId, accountId, asOfDate, statementBalanceInput]);
 
-  // Handle Toggle Line Clearance
-  const handleToggleLine = async (row: BrsTransactionRow) => {
-    const newClearedState = !row.isCleared;
-    const defaultDate = newClearedState ? (row.clearedDate || asOfDate || row.entryDate) : null;
+  // Robust Toggle Line Clearance
+  const handleToggleLine = async (lineId: string, currentCleared: boolean, currentClearedDate: string | null, entryDate: string) => {
+    const newClearedState = !currentCleared;
+    const defaultDate = newClearedState ? (currentClearedDate || asOfDate || entryDate) : null;
 
-    try {
-      // Optimistic local update
-      if (data) {
-        const updated = data.transactions.map(t => {
-          if (t.lineId === row.lineId) {
-            return { ...t, isCleared: newClearedState, clearedDate: defaultDate };
+    // Instant Optimistic Local Update & Recalculation
+    if (data) {
+      const updatedTransactions = data.transactions.map(t => {
+        if (t.lineId === lineId) {
+          return { ...t, isCleared: newClearedState, clearedDate: defaultDate };
+        }
+        return t;
+      });
+
+      // Recalculate BRS figures locally
+      let unpresentedTotal = 0;
+      let unpresentedCount = 0;
+      let unclearedDepositsTotal = 0;
+      let unclearedDepositsCount = 0;
+
+      updatedTransactions.forEach(t => {
+        if (!t.isCleared) {
+          if (t.credit > 0) {
+            unpresentedTotal += t.credit;
+            unpresentedCount++;
           }
-          return t;
-        });
-        setData({ ...data, transactions: updated });
+          if (t.debit > 0) {
+            unclearedDepositsTotal += t.debit;
+            unclearedDepositsCount++;
+          }
+        }
+      });
+
+      const netBookSigned = data.totalBookDebits - data.totalBookCredits;
+      const reconciledBankSigned = netBookSigned + unpresentedTotal - unclearedDepositsTotal;
+      const reconciledBankBalance = Math.abs(reconciledBankSigned);
+      const reconciledBankSide: 'Dr' | 'Cr' = reconciledBankSigned >= 0 ? 'Dr' : 'Cr';
+
+      let variance: number | null = null;
+      let isReconciled = false;
+      if (statementBalanceInput.trim()) {
+        const targetVal = parseFloat(statementBalanceInput);
+        if (!isNaN(targetVal)) {
+          variance = Math.abs(reconciledBankBalance - targetVal);
+          isReconciled = variance < 0.001;
+        }
       }
 
+      setData({
+        ...data,
+        transactions: updatedTransactions,
+        unpresentedChequesTotal: unpresentedTotal,
+        unpresentedChequesCount: unpresentedCount,
+        unclearedDepositsTotal,
+        unclearedDepositsCount,
+        reconciledBankBalance,
+        reconciledBankSide,
+        variance,
+        isReconciled
+      });
+    }
+
+    try {
       await fetch('/api/reconciliation/brs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'UPDATE_LINE',
-          lineId: row.lineId,
+          lineId,
           isCleared: newClearedState,
           clearedDate: defaultDate
         })
       });
-
-      // Refetch exact formula recalculation
-      fetchBrsData();
     } catch (err) {
       console.error('Failed to update line clearance:', err);
+      fetchBrsData();
     }
   };
 
   // Handle Change Clearance Date
   const handleDateChange = async (lineId: string, dateVal: string) => {
-    try {
-      if (data) {
-        const updated = data.transactions.map(t => {
-          if (t.lineId === lineId) {
-            return { ...t, clearedDate: dateVal, isCleared: !!dateVal };
-          }
-          return t;
-        });
-        setData({ ...data, transactions: updated });
-      }
+    if (data) {
+      const isCleared = !!dateVal;
+      const updatedTransactions = data.transactions.map(t => {
+        if (t.lineId === lineId) {
+          return { ...t, clearedDate: dateVal || null, isCleared };
+        }
+        return t;
+      });
+      setData({ ...data, transactions: updatedTransactions });
+    }
 
+    try {
       await fetch('/api/reconciliation/brs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -130,7 +173,6 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
           clearedDate: dateVal || null
         })
       });
-
       fetchBrsData();
     } catch (err) {
       console.error('Failed to update clearance date:', err);
@@ -165,7 +207,7 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
     const targetBalance = statementBalanceInput ? parseFloat(statementBalanceInput) : data.reconciledBankBalance;
 
     if (isNaN(targetBalance)) {
-      alert('Please enter a valid statement balance from your bank statement.');
+      alert('Please enter a valid statement ending balance from your bank statement.');
       return;
     }
 
@@ -217,6 +259,9 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
     return data.transactions;
   }, [data, filterMode]);
 
+  const unclearedCount = (data?.unpresentedChequesCount || 0) + (data?.unclearedDepositsCount || 0);
+  const clearedCount = (data?.transactions.length || 0) - unclearedCount;
+
   return (
     <div className="space-y-4 text-xs select-none">
       {/* Header / Period & Statement Balance Controls */}
@@ -231,12 +276,12 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
               </span>
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              Reconcile company book entries against bank clearance dates to account for unpresented cheques and uncleared deposits.
+              Click any transaction checkbox to toggle its clearance status against your actual bank statement.
             </p>
           </div>
 
           <div className="flex items-center gap-2 text-[11px]">
-            <span className="text-slate-400">Last Locked:</span>
+            <span className="text-slate-400">Last Locked Barrier:</span>
             <strong className="text-slate-200 font-mono bg-slate-900 px-2 py-1 rounded border border-slate-800">
               {data?.account?.last_reconciled_date || 'None'}
             </strong>
@@ -276,7 +321,7 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
             <input
               type="number"
               step="0.01"
-              placeholder="e.g. 340900.00 (From bank PDF)"
+              placeholder="e.g. 340900.00 (From bank statement PDF)"
               value={statementBalanceInput}
               onChange={(e) => setStatementBalanceInput(e.target.value)}
               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-white font-mono focus:border-emerald-500 focus:outline-none"
@@ -294,7 +339,7 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
         </div>
       )}
 
-      {/* BRS FORMULA SUMMARY CARD (The Traditional Reconciliation Math Proof) */}
+      {/* BRS FORMULA SUMMARY CARD (Live Mathematical Proof) */}
       {data && (
         <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3 shadow-sm">
           <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
@@ -312,7 +357,9 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
             </div>
 
             {/* 2. Unpresented Cheques (+) */}
-            <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
+            <div className={`p-3 rounded-xl border transition-colors ${
+              data.unpresentedChequesTotal > 0 ? 'bg-sky-950/40 border-sky-800/80' : 'bg-slate-900 border-slate-800'
+            }`}>
               <span className="text-[10px] text-sky-400 font-sans font-semibold block">
                 + Unpresented Cheques ({data.unpresentedChequesCount})
               </span>
@@ -322,7 +369,9 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
             </div>
 
             {/* 3. Uncleared Deposits (-) */}
-            <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
+            <div className={`p-3 rounded-xl border transition-colors ${
+              data.unclearedDepositsTotal > 0 ? 'bg-amber-950/40 border-amber-800/80' : 'bg-slate-900 border-slate-800'
+            }`}>
               <span className="text-[10px] text-amber-400 font-sans font-semibold block">
                 - Uncleared Deposits ({data.unclearedDepositsCount})
               </span>
@@ -374,24 +423,43 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
         <div className="p-3 bg-slate-900/90 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
           {/* Filter Pills */}
           <div className="flex items-center gap-1.5">
-            {[
-              { id: 'ALL', label: `All (${data?.transactions.length || 0})` },
-              { id: 'UNCLEARED', label: `Uncleared (${(data?.unpresentedChequesCount || 0) + (data?.unclearedDepositsCount || 0)})` },
-              { id: 'CLEARED', label: `Cleared` },
-            ].map(f => (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => setFilterMode(f.id as any)}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all text-[11px] ${
-                  filterMode === f.id
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-slate-800 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
+            <button
+              type="button"
+              onClick={() => setFilterMode('ALL')}
+              className={`px-3 py-1 rounded-lg font-bold transition-all text-[11px] ${
+                filterMode === 'ALL'
+                  ? 'bg-slate-700 text-white shadow-sm'
+                  : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              All ({data?.transactions.length || 0})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setFilterMode('UNCLEARED')}
+              className={`px-3 py-1 rounded-lg font-bold transition-all text-[11px] flex items-center gap-1.5 ${
+                filterMode === 'UNCLEARED'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'bg-slate-800 text-amber-400 hover:bg-slate-750'
+              }`}
+            >
+              <Clock className="w-3 h-3" />
+              <span>Pending / Uncleared ({unclearedCount})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setFilterMode('CLEARED')}
+              className={`px-3 py-1 rounded-lg font-bold transition-all text-[11px] flex items-center gap-1.5 ${
+                filterMode === 'CLEARED'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'bg-slate-800 text-emerald-400 hover:bg-slate-750'
+              }`}
+            >
+              <Check className="w-3 h-3" />
+              <span>Cleared ({clearedCount})</span>
+            </button>
           </div>
 
           {/* Bulk Clear Actions */}
@@ -399,16 +467,16 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
             <button
               type="button"
               onClick={() => handleBulkClearAll(true)}
-              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium"
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-[11px] font-semibold border border-slate-700"
             >
               Mark All Cleared
             </button>
             <button
               type="button"
               onClick={() => handleBulkClearAll(false)}
-              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-rose-400 text-[11px] font-medium"
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-rose-400 text-[11px] font-medium border border-slate-700"
             >
-              Clear None
+              Unmark All (Pending)
             </button>
           </div>
         </div>
@@ -431,21 +499,29 @@ export function BankReconciliationView({ accountId, onReconciliationComplete }: 
               {filteredRows.map(row => (
                 <tr
                   key={row.lineId}
-                  onClick={() => handleToggleLine(row)}
+                  onClick={() => handleToggleLine(row.lineId, row.isCleared, row.clearedDate, row.entryDate)}
                   className={`cursor-pointer transition-colors ${
                     row.isCleared
                       ? 'bg-slate-950 hover:bg-slate-900/60 text-slate-300'
-                      : 'bg-amber-950/20 hover:bg-amber-950/30 text-amber-200'
+                      : 'bg-amber-950/25 hover:bg-amber-950/40 text-amber-200'
                   }`}
                 >
-                  {/* Checkbox */}
-                  <td className="py-2 px-3 text-center" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={row.isCleared}
-                      onChange={() => handleToggleLine(row)}
-                      className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
-                    />
+                  {/* Custom Clickable Checkbox Icon */}
+                  <td className="py-2 px-3 text-center">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleLine(row.lineId, row.isCleared, row.clearedDate, row.entryDate);
+                      }}
+                      className="w-6 h-6 flex items-center justify-center rounded hover:bg-slate-800 transition-colors mx-auto"
+                    >
+                      {row.isCleared ? (
+                        <CheckSquare2 className="w-4 h-4 text-emerald-400" />
+                      ) : (
+                        <Square className="w-4 h-4 text-amber-400/80" />
+                      )}
+                    </button>
                   </td>
 
                   {/* Voucher Date */}
