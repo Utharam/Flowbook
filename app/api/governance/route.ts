@@ -36,11 +36,12 @@ export async function POST(req: Request) {
       const { company_id, full_name, role, identification_number, appointed_date, resigned_date } = payload;
       const id = `off_${Date.now()}`;
       const isActive = resigned_date ? 0 : 1;
+      const now = new Date().toISOString();
 
       db.prepare(`
-        INSERT INTO company_officers (id, company_id, full_name, role, identification_number, appointed_date, resigned_date, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(id, company_id, full_name, role, identification_number || null, appointed_date, resigned_date || null, isActive);
+        INSERT INTO company_officers (id, company_id, full_name, role, identification_number, appointed_date, resigned_date, is_active, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, company_id, full_name, role, identification_number || null, appointed_date, resigned_date || null, isActive, now);
 
       return NextResponse.json({ success: true, message: 'Officer added successfully' });
     }
@@ -69,12 +70,14 @@ export async function POST(req: Request) {
       } = payload;
 
       const id = `sh_${Date.now()}`;
+      const now = new Date().toISOString();
+
       db.prepare(`
         INSERT INTO shareholding_structure (
           id, company_id, shareholder_name, shareholder_type, share_class,
           number_of_shares, percentage_holding, is_ubo, ubo_controlling_interest_type,
-          effective_from
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          effective_from, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         company_id,
@@ -85,7 +88,8 @@ export async function POST(req: Request) {
         Number(percentage_holding),
         is_ubo ? 1 : 0,
         ubo_controlling_interest_type || null,
-        effective_from
+        effective_from,
+        now
       );
 
       return NextResponse.json({ success: true, message: 'Shareholder added successfully' });

@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --test lib/**/*.test.js lib/**/*.test.ts"
+    "test": "tsx --test lib/**/*.test.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",

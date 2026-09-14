@@ -98,11 +98,31 @@ export async function POST(req: Request) {
 
     // 2. EXECUTE ATOMIC BATCH JOURNAL POSTING
     if (action === 'POST_BATCH') {
-      if (!validatedRows || !Array.isArray(validatedRows) || validatedRows.length === 0) {
-        return NextResponse.json({ success: false, error: 'No validated rows provided' }, { status: 400 });
+      let rowsToPost = validatedRows;
+
+      // If raw fileContent is supplied, strictly re-validate server-side
+      if (fileContent) {
+        const valResult = validateBankImportContent(company, account, fileContent);
+        if (!valResult.valid) {
+          return NextResponse.json({
+            success: false,
+            error: `Server-side validation failed: ${valResult.errors.join('; ')}`
+          }, { status: 400 });
+        }
+        rowsToPost = valResult.parsedRows;
       }
 
-      const result = executeBankImportBatch(company, account, validatedRows, actor || 'Accountant');
+      if (!rowsToPost || !Array.isArray(rowsToPost) || rowsToPost.length === 0) {
+        return NextResponse.json({ success: false, error: 'No validated rows provided to post' }, { status: 400 });
+      }
+
+      // Check that all rows have counter accounts and no errors
+      const hasErrors = rowsToPost.some((r: any) => !r.counterAccountId || !!r.error);
+      if (hasErrors) {
+        return NextResponse.json({ success: false, error: 'Batch contains unresolved errors or missing counter accounts' }, { status: 400 });
+      }
+
+      const result = executeBankImportBatch(company, account, rowsToPost, actor || 'Accountant');
       if (!result.success) {
         return NextResponse.json({ success: false, error: result.error }, { status: 400 });
       }
@@ -111,6 +131,7 @@ export async function POST(req: Request) {
         success: true,
         createdCount: result.createdCount,
         newReconciledDate: result.newReconciledDate,
+        endingBalance: result.endingBalance,
         message: `Successfully posted ${result.createdCount} journal vouchers. Reconciled date advanced to ${result.newReconciledDate}.`
       });
     }

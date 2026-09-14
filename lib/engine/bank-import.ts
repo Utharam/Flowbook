@@ -437,6 +437,9 @@ export function executeBankImportBatch(
     return { success: false, createdCount: 0, newReconciledDate: '', endingBalance: 0, error: 'Cannot post batch with unresolved validation errors.' };
   }
 
+  const spName = `sp_batch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  db.exec(`SAVEPOINT ${spName}`);
+
   try {
     let maxDate = targetAccount.last_reconciled_date || '2026-01-01';
     let postedCount = 0;
@@ -493,27 +496,41 @@ export function executeBankImportBatch(
       postedCount++;
     }
 
-    // Update account last_reconciled_date in SQLite
+    // Compute true ending balance after postings
+    const balRow = db.prepare(`
+      SELECT COALESCE(SUM(jl.amount), 0) as net_amount
+      FROM journal_lines jl
+      JOIN journal_entries je ON jl.entry_id = je.id
+      WHERE je.company_id = ? AND jl.account_id = ? AND je.status = 'POSTED'
+    `).get(company.id, targetAccount.id) as { net_amount: number };
+
+    const endingBalance = isDebitNormal ? -balRow.net_amount : balRow.net_amount;
+
+    // Update account last_reconciled_date and last_reconciled_balance in SQLite
     db.prepare(`
-      UPDATE accounts SET last_reconciled_date = ? WHERE id = ?
-    `).run(maxDate, targetAccount.id);
+      UPDATE accounts SET last_reconciled_date = ?, last_reconciled_balance = ? WHERE id = ?
+    `).run(maxDate, endingBalance, targetAccount.id);
 
     // Record Audit Event
     logAuditEvent(
       company.id,
       'BANK_STATEMENT_BATCH_IMPORTED',
       actor,
-      `Imported & reconciled bank statement batch of ${postedCount} transactions for ${targetAccount.code} - ${targetAccount.name}. Reconciled date advanced to ${maxDate}.`,
-      { accountId: targetAccount.id, postedCount, newReconciledDate: maxDate }
+      `Imported & reconciled bank statement batch of ${postedCount} transactions for ${targetAccount.code} - ${targetAccount.name}. Reconciled date advanced to ${maxDate}, ending balance: ${endingBalance}.`,
+      { accountId: targetAccount.id, postedCount, newReconciledDate: maxDate, endingBalance }
     );
+
+    db.exec(`RELEASE ${spName}`);
 
     return {
       success: true,
       createdCount: postedCount,
       newReconciledDate: maxDate,
-      endingBalance: 0
+      endingBalance
     };
   } catch (err: any) {
+    db.exec(`ROLLBACK TO ${spName}`);
+    db.exec(`RELEASE ${spName}`);
     return {
       success: false,
       createdCount: 0,

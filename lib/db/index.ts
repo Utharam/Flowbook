@@ -10,7 +10,7 @@ export function getDb(): DatabaseSync {
     return dbInstance;
   }
 
-  const dbPath = path.join(process.cwd(), 'flowbook.sqlite');
+  const dbPath = process.env.FLOWBOOK_DB_PATH || path.join(process.cwd(), 'flowbook.sqlite');
   dbInstance = new DatabaseSync(dbPath);
 
   // Enable WAL mode & foreign keys for enterprise concurrency & integrity
@@ -21,6 +21,15 @@ export function getDb(): DatabaseSync {
 
   initSchemaAndSeed(dbInstance);
   return dbInstance;
+}
+
+export function closeDb(): void {
+  if (dbInstance) {
+    try {
+      dbInstance.close();
+    } catch {}
+    dbInstance = null;
+  }
 }
 
 export function logAuditEvent(
@@ -141,6 +150,14 @@ function initSchemaAndSeed(db: DatabaseSync) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS document_sequences (
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      prefix TEXT NOT NULL,
+      fiscal_year INTEGER NOT NULL,
+      current_val INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (company_id, prefix, fiscal_year)
+    );
+
     CREATE TABLE IF NOT EXISTS flow_templates (
       id TEXT PRIMARY KEY,
       company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -158,13 +175,17 @@ function initSchemaAndSeed(db: DatabaseSync) {
       id TEXT PRIMARY KEY,
       company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
-      tag TEXT NOT NULL,
-      cost_account_id TEXT NOT NULL REFERENCES accounts(id),
+      asset_code TEXT,
+      category TEXT,
+      tag TEXT,
+      cost_account_id TEXT REFERENCES accounts(id),
       accumulated_dep_account_id TEXT REFERENCES accounts(id),
       depreciation_expense_account_id TEXT REFERENCES accounts(id),
       income_account_id TEXT REFERENCES accounts(id),
       maintenance_account_id TEXT REFERENCES accounts(id),
       acquisition_date TEXT,
+      purchase_cost REAL NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'USD',
       status TEXT NOT NULL DEFAULT 'ACTIVE',
       created_at TEXT NOT NULL
     );
@@ -200,6 +221,9 @@ function initSchemaAndSeed(db: DatabaseSync) {
       metadata TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_company_number 
+    ON journal_entries(company_id, entry_number);
   `);
 
   // Safe migrations for existing SQLite database
@@ -211,6 +235,11 @@ function initSchemaAndSeed(db: DatabaseSync) {
   try { db.exec(`ALTER TABLE accounts ADD COLUMN last_reconciled_balance REAL;`); } catch {}
   try { db.exec(`ALTER TABLE journal_lines ADD COLUMN bank_cleared_date TEXT;`); } catch {}
   try { db.exec(`ALTER TABLE journal_lines ADD COLUMN is_bank_cleared INTEGER NOT NULL DEFAULT 0;`); } catch {}
+  try { db.exec(`ALTER TABLE assets ADD COLUMN asset_code TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE assets ADD COLUMN category TEXT;`); } catch {}
+  try { db.exec(`ALTER TABLE assets ADD COLUMN purchase_cost REAL NOT NULL DEFAULT 0;`); } catch {}
+  try { db.exec(`ALTER TABLE assets ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD';`); } catch {}
+  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_company_number ON journal_entries(company_id, entry_number);`); } catch {}
 
   seedInitialData(db);
 }
@@ -617,3 +646,52 @@ function seedSampleJournalEntries(db: DatabaseSync, now: string) {
     )
   `).run(now);
 }
+
+/**
+ * Atomically generates the next sequential voucher number for a company, prefix, and fiscal year.
+ * Backed by document_sequences table and unique constraints to prevent race conditions.
+ */
+export function getNextDocumentSequence(
+  db: DatabaseSync,
+  companyId: string,
+  prefix: string,
+  fiscalYear: number
+): number {
+  const existingSeq = db.prepare(`
+    SELECT current_val FROM document_sequences 
+    WHERE company_id = ? AND prefix = ? AND fiscal_year = ?
+  `).get(companyId, prefix, fiscalYear) as { current_val: number } | undefined;
+
+  let nextVal = 1;
+  if (existingSeq) {
+    nextVal = existingSeq.current_val + 1;
+    db.prepare(`
+      UPDATE document_sequences SET current_val = ?
+      WHERE company_id = ? AND prefix = ? AND fiscal_year = ?
+    `).run(nextVal, companyId, prefix, fiscalYear);
+  } else {
+    // Determine current max from existing journal_entries if any
+    const pattern = `${prefix}-${fiscalYear}-%`;
+    const rows = db.prepare(`
+      SELECT entry_number FROM journal_entries
+      WHERE company_id = ? AND entry_number LIKE ?
+    `).all(companyId, pattern) as { entry_number: string }[];
+
+    let maxVal = 0;
+    for (const r of rows) {
+      const parts = r.entry_number.split('-');
+      const num = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(num) && num > maxVal) {
+        maxVal = num;
+      }
+    }
+    nextVal = maxVal + 1;
+    db.prepare(`
+      INSERT INTO document_sequences (company_id, prefix, fiscal_year, current_val)
+      VALUES (?, ?, ?, ?)
+    `).run(companyId, prefix, fiscalYear, nextVal);
+  }
+
+  return nextVal;
+}
+

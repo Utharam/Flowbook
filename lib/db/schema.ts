@@ -174,13 +174,17 @@ export interface Asset {
   id: string;
   company_id: string;
   name: string;
-  tag: string; // e.g. "#1206"
-  cost_account_id: string;
+  asset_code?: string;
+  category?: string;
+  tag?: string; // e.g. "#1206"
+  cost_account_id?: string;
   accumulated_dep_account_id?: string;
   depreciation_expense_account_id?: string;
   income_account_id?: string;
   maintenance_account_id?: string;
   acquisition_date?: string;
+  purchase_cost?: number;
+  currency?: string;
   status: 'ACTIVE' | 'DISPOSED' | 'UNDER_MAINTENANCE';
   created_at: string;
 }

@@ -1,5 +1,5 @@
 import { Company, JournalEntry, JournalLine, Account } from '../db/schema';
-import { getDb } from '../db';
+import { getDb, getNextDocumentSequence } from '../db';
 
 export interface CreateJournalLineInput {
   accountId: string;
@@ -34,14 +34,22 @@ export interface AccountingValidationResult {
 /**
  * Validates double-entry balancing and lock date constraints.
  */
+/**
+ * Validates double-entry balancing, account existence, active/leaf status, and lock date constraints.
+ */
 export function validateJournalEntry(
   company: Company,
   input: CreateJournalEntryInput
 ): AccountingValidationResult {
   const errors: string[] = [];
 
-  // 1. Check lock date barrier
-  if (company.lock_date && input.entryDate <= company.lock_date) {
+  // 1. Check entry date format
+  if (!input.entryDate || !/^\d{4}-\d{2}-\d{2}$/.test(input.entryDate)) {
+    errors.push('A valid entry date in YYYY-MM-DD format is required.');
+  }
+
+  // 2. Check lock date barrier
+  if (company.lock_date && input.entryDate && input.entryDate <= company.lock_date) {
     errors.push(
       `Books are locked for period up to ${company.lock_date}. Cannot post entries on or prior to lock date.`
     );
@@ -68,6 +76,21 @@ export function validateJournalEntry(
     };
   }
 
+  // Fetch accounts from DB to validate existence, company isolation, active status, and non-group
+  const db = getDb();
+  const accountIds = Array.from(new Set(input.lines.map(l => l.accountId).filter(Boolean)));
+  const accountMap = new Map<string, Account>();
+  if (accountIds.length > 0) {
+    const placeholders = accountIds.map(() => '?').join(',');
+    const rows = db.prepare(`SELECT * FROM accounts WHERE id IN (${placeholders})`).all(...accountIds) as unknown as Account[];
+    for (const r of rows) {
+      accountMap.set(r.id, r);
+    }
+  }
+
+  const decimalPlaces = typeof company.decimal_places === 'number' ? company.decimal_places : 2;
+  const factor = Math.pow(10, decimalPlaces);
+
   let totalDebits = 0;
   let totalCredits = 0;
   let netVariance = 0;
@@ -77,6 +100,26 @@ export function validateJournalEntry(
     if (!line.accountId) {
       errors.push(`Line #${i + 1} is missing an account.`);
       continue;
+    }
+
+    const account = accountMap.get(line.accountId);
+    if (!account) {
+      errors.push(`Line #${i + 1}: Account ID "${line.accountId}" does not exist in Chart of Accounts.`);
+    } else {
+      if (account.company_id !== company.id) {
+        errors.push(`Line #${i + 1}: Account "${account.name}" (${account.code}) belongs to a different entity and cannot be posted in ${company.legal_name}.`);
+      }
+      if (account.is_active === 0) {
+        errors.push(`Line #${i + 1}: Account "${account.name}" (${account.code}) is inactive and cannot accept postings.`);
+      }
+      if (account.is_group === 1) {
+        errors.push(`Line #${i + 1}: Account "${account.name}" (${account.code}) is a parent group account and cannot accept journal postings directly.`);
+      }
+    }
+
+    // Check for conflicting amounts
+    if (line.debit !== undefined && line.debit > 0 && line.credit !== undefined && line.credit > 0) {
+      errors.push(`Line #${i + 1} has conflicting debit and credit amounts. Specify only debit or credit.`);
     }
 
     const rate = line.exchangeRate !== undefined && line.exchangeRate > 0 ? line.exchangeRate : 1.0;
@@ -93,6 +136,9 @@ export function validateJournalEntry(
       baseAmount = line.foreignAmount * rate;
     }
 
+    // Round to company decimal precision
+    baseAmount = Math.round(baseAmount * factor) / factor;
+
     if (baseAmount < 0) {
       totalDebits += Math.abs(baseAmount);
     } else {
@@ -101,27 +147,34 @@ export function validateJournalEntry(
     netVariance += baseAmount;
   }
 
-  // Round to company decimal precision or 4 decimals for float tolerance
-  const tolerance = Math.pow(10, -Math.max(company.decimal_places, 2));
+  // Round to company decimal precision
+  const tolerance = Math.pow(10, -decimalPlaces);
+  netVariance = Math.round(netVariance * factor) / factor;
+  totalDebits = Math.round(totalDebits * factor) / factor;
+  totalCredits = Math.round(totalCredits * factor) / factor;
+
   if (Math.abs(netVariance) > tolerance) {
     errors.push(
       `Zero-Sum Invariant Violated: Total Debits (${totalDebits.toFixed(
-        company.decimal_places
+        decimalPlaces
       )}) must equal Total Credits (${totalCredits.toFixed(
-        company.decimal_places
-      )}). Variance: ${netVariance.toFixed(company.decimal_places)} ${company.base_currency}.`
+        decimalPlaces
+      )}). Variance: ${netVariance.toFixed(decimalPlaces)} ${company.base_currency}.`
     );
   }
 
   return {
     valid: errors.length === 0,
-    totalDebits: Math.round(totalDebits * 10000) / 10000,
-    totalCredits: Math.round(totalCredits * 10000) / 10000,
-    netVariance: Math.round(netVariance * 10000) / 10000,
+    totalDebits,
+    totalCredits,
+    netVariance,
     errors
   };
 }
 
+/**
+ * Creates and posts a Journal Entry atomically.
+ */
 /**
  * Creates and posts a Journal Entry atomically.
  */
@@ -140,81 +193,88 @@ export function postJournalEntry(
 
   // Generate sequence number
   const prefix = input.isNonFinancial ? 'ATT' : 'JV';
-  const year = input.entryDate.substring(0, 4);
-  const countRow = db.prepare(`
-    SELECT COUNT(*) as count FROM journal_entries 
-    WHERE company_id = ? AND entry_number LIKE ?
-  `).get(company.id, `${prefix}-${year}-%`) as any;
-  
-  const seqNum = String((countRow?.count || 0) + 1).padStart(4, '0');
-  const entryNumber = `${prefix}-${year}-${seqNum}`;
+  const year = parseInt(input.entryDate.substring(0, 4), 10);
 
-  db.prepare(`
-    INSERT INTO journal_entries (
-      id, company_id, entry_number, entry_date, memo, reference,
-      is_reversal, is_non_financial, status, created_by, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'POSTED', ?, ?)
-  `).run(
-    entryId,
-    company.id,
-    entryNumber,
-    input.entryDate,
-    input.memo || null,
-    input.reference || null,
-    input.isNonFinancial ? 1 : 0,
-    input.createdBy || 'System',
-    now
-  );
+  const spName = `sp_post_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  db.exec(`SAVEPOINT ${spName}`);
 
-  if (!input.isNonFinancial && input.lines) {
-    const insertLineStmt = db.prepare(`
-      INSERT INTO journal_lines (
-        id, entry_id, account_id, currency, exchange_rate, foreign_amount, amount, memo, tags, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+  try {
+    const seq = getNextDocumentSequence(db, company.id, prefix, year);
+    const seqNum = String(seq).padStart(4, '0');
+    const entryNumber = `${prefix}-${year}-${seqNum}`;
 
-    for (let i = 0; i < input.lines.length; i++) {
-      const line = input.lines[i];
-      const rate = line.exchangeRate !== undefined && line.exchangeRate > 0 ? line.exchangeRate : 1.0;
-      const currency = line.currency || company.base_currency;
-      
-      let foreignAmt = 0;
-      let baseAmt = 0;
+    db.prepare(`
+      INSERT INTO journal_entries (
+        id, company_id, entry_number, entry_date, memo, reference,
+        is_reversal, is_non_financial, status, created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'POSTED', ?, ?)
+    `).run(
+      entryId,
+      company.id,
+      entryNumber,
+      input.entryDate,
+      input.memo || null,
+      input.reference || null,
+      input.isNonFinancial ? 1 : 0,
+      input.createdBy || 'System',
+      now
+    );
 
-      if (line.signedAmount !== undefined) {
-        baseAmt = line.signedAmount;
-        foreignAmt = line.foreignAmount !== undefined ? line.foreignAmount : baseAmt / rate;
-      } else if (line.debit && line.debit > 0) {
-        foreignAmt = -line.debit;
-        baseAmt = -line.debit * rate;
-      } else if (line.credit && line.credit > 0) {
-        foreignAmt = line.credit;
-        baseAmt = line.credit * rate;
-      } else if (line.foreignAmount !== undefined) {
-        foreignAmt = line.foreignAmount;
-        baseAmt = foreignAmt * rate;
+    if (!input.isNonFinancial && input.lines) {
+      const insertLineStmt = db.prepare(`
+        INSERT INTO journal_lines (
+          id, entry_id, account_id, currency, exchange_rate, foreign_amount, amount, memo, tags, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (let i = 0; i < input.lines.length; i++) {
+        const line = input.lines[i];
+        const rate = line.exchangeRate !== undefined && line.exchangeRate > 0 ? line.exchangeRate : 1.0;
+        const currency = line.currency || company.base_currency;
+        
+        let foreignAmt = 0;
+        let baseAmt = 0;
+
+        if (line.signedAmount !== undefined) {
+          baseAmt = line.signedAmount;
+          foreignAmt = line.foreignAmount !== undefined ? line.foreignAmount : baseAmt / rate;
+        } else if (line.debit && line.debit > 0) {
+          foreignAmt = -line.debit;
+          baseAmt = -line.debit * rate;
+        } else if (line.credit && line.credit > 0) {
+          foreignAmt = line.credit;
+          baseAmt = line.credit * rate;
+        } else if (line.foreignAmount !== undefined) {
+          foreignAmt = line.foreignAmount;
+          baseAmt = foreignAmt * rate;
+        }
+
+        const lineId = `ln_${entryId}_${i + 1}`;
+        const tagsJson = JSON.stringify(line.tags || []);
+
+        insertLineStmt.run(
+          lineId,
+          entryId,
+          line.accountId,
+          currency,
+          rate,
+          foreignAmt,
+          baseAmt,
+          line.memo || null,
+          tagsJson,
+          now
+        );
       }
-
-      const lineId = `ln_${entryId}_${i + 1}`;
-      const tagsJson = JSON.stringify(line.tags || []);
-
-      insertLineStmt.run(
-        lineId,
-        entryId,
-        line.accountId,
-        currency,
-        rate,
-        foreignAmt,
-        baseAmt,
-        line.memo || null,
-        tagsJson,
-        now
-      );
     }
-  }
 
-  const createdEntry = (db.prepare('SELECT * FROM journal_entries WHERE id = ?').get(entryId) as unknown) as JournalEntry;
-  return { success: true, entry: createdEntry };
+    db.exec(`RELEASE ${spName}`);
+    const createdEntry = (db.prepare('SELECT * FROM journal_entries WHERE id = ?').get(entryId) as unknown) as JournalEntry;
+    return { success: true, entry: createdEntry };
+  } catch (err: any) {
+    db.exec(`ROLLBACK TO ${spName}`);
+    db.exec(`RELEASE ${spName}`);
+    return { success: false, errors: [err.message || 'Database error occurred during voucher posting'] };
+  }
 }
 
 /**
@@ -238,6 +298,15 @@ export function createMirrorReversal(
     return { success: false, errors: ['Cannot reverse an entry that is already a reversal.'] };
   }
 
+  if (orig.status === 'REVERSED') {
+    return { success: false, errors: ['Journal entry has already been reversed.'] };
+  }
+
+  const existingReversal = db.prepare('SELECT id FROM journal_entries WHERE reversed_from_id = ? AND company_id = ?').get(orig.id, company.id);
+  if (existingReversal) {
+    return { success: false, errors: ['Journal entry has already been reversed.'] };
+  }
+
   if (company.lock_date && reversalDate <= company.lock_date) {
     return { success: false, errors: [`Reversal date ${reversalDate} falls inside locked period.`] };
   }
@@ -246,62 +315,71 @@ export function createMirrorReversal(
   
   const reversalEntryId = `jv_rev_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const now = new Date().toISOString();
-  const year = reversalDate.substring(0, 4);
+  const year = parseInt(reversalDate.substring(0, 4), 10);
 
-  const countRow = db.prepare(`
-    SELECT COUNT(*) as count FROM journal_entries 
-    WHERE company_id = ? AND entry_number LIKE 'REV-%'
-  `).get(company.id) as any;
-  
-  const seqNum = String((countRow?.count || 0) + 1).padStart(4, '0');
-  const entryNumber = `REV-${year}-${seqNum}`;
+  const spName = `sp_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  db.exec(`SAVEPOINT ${spName}`);
 
-  db.prepare(`
-    INSERT INTO journal_entries (
-      id, company_id, entry_number, entry_date, memo, reference,
-      is_reversal, reversed_from_id, is_non_financial, status, created_by, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, 0, 'POSTED', ?, ?)
-  `).run(
-    reversalEntryId,
-    company.id,
-    entryNumber,
-    reversalDate,
-    reversalMemo || `Mirror Reversal of ${orig.entry_number} (${orig.memo || 'Voucher'})`,
-    `REV:${orig.entry_number}`,
-    orig.id,
-    createdBy,
-    now
-  );
+  try {
+    const seq = getNextDocumentSequence(db, company.id, 'REV', year);
+    const seqNum = String(seq).padStart(4, '0');
+    const entryNumber = `REV-${year}-${seqNum}`;
 
-  const insertLineStmt = db.prepare(`
-    INSERT INTO journal_lines (
-      id, entry_id, account_id, currency, exchange_rate, foreign_amount, amount, memo, tags, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
+    // Mark original entry as REVERSED
+    db.prepare("UPDATE journal_entries SET status = 'REVERSED' WHERE id = ?").run(orig.id);
 
-  for (let i = 0; i < lines.length; i++) {
-    const origLine = lines[i];
-    const lineId = `ln_${reversalEntryId}_${i + 1}`;
-    
-    // Invert the signed amounts
-    const invertedForeign = -origLine.foreign_amount;
-    const invertedBase = -origLine.amount;
-    const tagsString = typeof origLine.tags === 'string' ? origLine.tags : JSON.stringify(origLine.tags || []);
-
-    insertLineStmt.run(
-      lineId,
+    db.prepare(`
+      INSERT INTO journal_entries (
+        id, company_id, entry_number, entry_date, memo, reference,
+        is_reversal, reversed_from_id, is_non_financial, status, created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, 0, 'POSTED', ?, ?)
+    `).run(
       reversalEntryId,
-      origLine.account_id,
-      origLine.currency,
-      origLine.exchange_rate,
-      invertedForeign,
-      invertedBase,
-      `Reversal: ${origLine.memo || ''}`,
-      tagsString,
+      company.id,
+      entryNumber,
+      reversalDate,
+      reversalMemo || `Mirror Reversal of ${orig.entry_number} (${orig.memo || 'Voucher'})`,
+      `REV:${orig.entry_number}`,
+      orig.id,
+      createdBy,
       now
     );
-  }
 
-  const createdEntry = (db.prepare('SELECT * FROM journal_entries WHERE id = ?').get(reversalEntryId) as unknown) as JournalEntry;
-  return { success: true, entry: createdEntry };
+    const insertLineStmt = db.prepare(`
+      INSERT INTO journal_lines (
+        id, entry_id, account_id, currency, exchange_rate, foreign_amount, amount, memo, tags, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (let i = 0; i < lines.length; i++) {
+      const origLine = lines[i];
+      const lineId = `ln_${reversalEntryId}_${i + 1}`;
+      
+      // Invert the signed amounts
+      const invertedForeign = -origLine.foreign_amount;
+      const invertedBase = -origLine.amount;
+      const tagsString = typeof origLine.tags === 'string' ? origLine.tags : JSON.stringify(origLine.tags || []);
+
+      insertLineStmt.run(
+        lineId,
+        reversalEntryId,
+        origLine.account_id,
+        origLine.currency,
+        origLine.exchange_rate,
+        invertedForeign,
+        invertedBase,
+        `Reversal: ${origLine.memo || ''}`,
+        tagsString,
+        now
+      );
+    }
+
+    db.exec(`RELEASE ${spName}`);
+    const createdEntry = (db.prepare('SELECT * FROM journal_entries WHERE id = ?').get(reversalEntryId) as unknown) as JournalEntry;
+    return { success: true, entry: createdEntry };
+  } catch (err: any) {
+    db.exec(`ROLLBACK TO ${spName}`);
+    db.exec(`RELEASE ${spName}`);
+    return { success: false, errors: [err.message || 'Database error occurred during mirror reversal'] };
+  }
 }

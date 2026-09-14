@@ -41,12 +41,19 @@ export function getHierarchicalCoa(
       SUM(jl.amount) as net_amount
     FROM journal_lines jl
     JOIN journal_entries je ON jl.entry_id = je.id
+    JOIN accounts a ON jl.account_id = a.id
     WHERE je.company_id = ? AND je.status = 'POSTED' AND je.is_non_financial = 0
   `;
   const params: any[] = [companyId];
 
   if (options.startDate) {
-    query += ` AND je.entry_date >= ?`;
+    // Balance Sheet accounts (ASSET, LIABILITY, EQUITY) are cumulative as of endDate,
+    // while P&L accounts (REVENUE, EXPENSE) are period-bound between startDate and endDate.
+    query += ` AND (
+      (a.type IN ('REVENUE', 'EXPENSE') AND je.entry_date >= ?)
+      OR
+      (a.type IN ('ASSET', 'LIABILITY', 'EQUITY'))
+    )`;
     params.push(options.startDate);
   }
   if (options.endDate) {
@@ -54,8 +61,8 @@ export function getHierarchicalCoa(
     params.push(options.endDate);
   }
   if (options.tag) {
-    query += ` AND jl.tags LIKE ?`;
-    params.push(`%"${options.tag}"%`);
+    query += ` AND EXISTS (SELECT 1 FROM json_each(jl.tags) WHERE json_each.value = ?)`;
+    params.push(options.tag);
   }
 
   query += ` GROUP BY jl.account_id`;

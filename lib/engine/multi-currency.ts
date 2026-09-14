@@ -62,12 +62,14 @@ export interface FxSettlementInput {
   receivableOrPayableAccountId: string;
   bankAccountId: string;
   fxGainLossAccountId: string;
+  direction?: 'RECEIPT' | 'PAYMENT'; // RECEIPT = AR customer receipt (default); PAYMENT = AP vendor payment
   tags?: string[];
   memo?: string;
 }
 
 /**
  * Generates the balanced multi-currency settlement lines with automated Realized FX Gain/Loss.
+ * Handles both AR Receipts (Dr Bank, Cr AR) and AP Payments (Dr AP, Cr Bank).
  */
 export function generateFxSettlementLines(input: FxSettlementInput): CreateJournalLineInput[] {
   const {
@@ -79,50 +81,109 @@ export function generateFxSettlementLines(input: FxSettlementInput): CreateJourn
     receivableOrPayableAccountId,
     bankAccountId,
     fxGainLossAccountId,
+    direction = 'RECEIPT',
     tags = [],
     memo = 'Settlement of foreign currency item'
   } = input;
 
-  const originalBaseAmount = foreignAmount * originalExchangeRate;
-  const settlementBaseAmount = foreignAmount * settlementExchangeRate;
-  const fxVariance = settlementBaseAmount - originalBaseAmount;
+  if (originalExchangeRate <= 0 || settlementExchangeRate <= 0) {
+    throw new Error(`Exchange rates must be positive numbers. Received: original=${originalExchangeRate}, settlement=${settlementExchangeRate}`);
+  }
+
+  if (foreignAmount <= 0) {
+    throw new Error(`Foreign amount must be strictly positive. Received: ${foreignAmount}`);
+  }
+
+  const decimalPlaces = typeof company.decimal_places === 'number' ? company.decimal_places : 2;
+  const factor = Math.pow(10, decimalPlaces);
+
+  const originalBaseAmount = Math.round(foreignAmount * originalExchangeRate * factor) / factor;
+  const settlementBaseAmount = Math.round(foreignAmount * settlementExchangeRate * factor) / factor;
 
   const lines: CreateJournalLineInput[] = [];
 
-  // Line 1: Bank Leg (Inflow or Outflow at settlement exchange rate)
-  // If positive foreignAmount (e.g. customer payment received): Debit Bank (negative in signed math)
-  lines.push({
-    accountId: bankAccountId,
-    currency: settlementCurrency,
-    exchangeRate: settlementExchangeRate,
-    foreignAmount: -foreignAmount,
-    signedAmount: -settlementBaseAmount,
-    memo: `${memo} - Cash Movement (${foreignAmount} ${settlementCurrency} @ ${settlementExchangeRate})`,
-    tags
-  });
+  if (direction === 'PAYMENT') {
+    // AP VENDOR PAYMENT:
+    // Bank pays cash out: Credit Bank (positive in signed math)
+    // AP liability cleared: Debit AP (negative in signed math)
+    // FX Variance: if paid more base currency than booked, it's an FX Loss (negative / Dr); if paid less, FX Gain (positive / Cr).
+    const fxVariance = Math.round((originalBaseAmount - settlementBaseAmount) * factor) / factor;
 
-  // Line 2: Clearing AR / AP Leg (at original exchange rate)
-  lines.push({
-    accountId: receivableOrPayableAccountId,
-    currency: settlementCurrency,
-    exchangeRate: originalExchangeRate,
-    foreignAmount: foreignAmount,
-    signedAmount: originalBaseAmount,
-    memo: `${memo} - Clearing Invoice Balance (${foreignAmount} ${settlementCurrency} @ ${originalExchangeRate})`,
-    tags
-  });
-
-  // Line 3: Realized FX Gain/Loss Balancing Leg
-  if (Math.abs(fxVariance) > 0.0001) {
+    // Line 1: Bank Leg (Disbursement / Credit)
     lines.push({
-      accountId: fxGainLossAccountId,
-      currency: company.base_currency,
-      exchangeRate: 1.0,
-      foreignAmount: fxVariance,
-      signedAmount: fxVariance,
-      memo: `Automated Realized FX ${fxVariance >= 0 ? 'Gain' : 'Loss'} Balancing Leg`,
-      tags: [...tags, '#FX-GainLoss']
+      accountId: bankAccountId,
+      currency: settlementCurrency,
+      exchangeRate: settlementExchangeRate,
+      foreignAmount: foreignAmount,
+      signedAmount: settlementBaseAmount,
+      memo: `${memo} - Cash Outflow (${foreignAmount} ${settlementCurrency} @ ${settlementExchangeRate})`,
+      tags
     });
+
+    // Line 2: Clearing AP Leg (Liability Reduction / Debit)
+    lines.push({
+      accountId: receivableOrPayableAccountId,
+      currency: settlementCurrency,
+      exchangeRate: originalExchangeRate,
+      foreignAmount: -foreignAmount,
+      signedAmount: -originalBaseAmount,
+      memo: `${memo} - Clearing Vendor Bill (${foreignAmount} ${settlementCurrency} @ ${originalExchangeRate})`,
+      tags
+    });
+
+    // Line 3: Realized FX Gain/Loss Balancing Leg
+    if (Math.abs(fxVariance) > 0.0001) {
+      lines.push({
+        accountId: fxGainLossAccountId,
+        currency: company.base_currency,
+        exchangeRate: 1.0,
+        foreignAmount: fxVariance,
+        signedAmount: fxVariance,
+        memo: `Automated Realized FX ${fxVariance >= 0 ? 'Gain' : 'Loss'} Balancing Leg`,
+        tags: [...tags, '#FX-GainLoss']
+      });
+    }
+  } else {
+    // AR CUSTOMER RECEIPT:
+    // Bank receives cash: Debit Bank (negative in signed math)
+    // AR asset cleared: Credit AR (positive in signed math)
+    // FX Variance: if received more base currency than booked, it's an FX Gain (positive / Cr); if received less, FX Loss (negative / Dr).
+    const fxVariance = Math.round((settlementBaseAmount - originalBaseAmount) * factor) / factor;
+
+    // Line 1: Bank Leg (Inflow / Debit)
+    lines.push({
+      accountId: bankAccountId,
+      currency: settlementCurrency,
+      exchangeRate: settlementExchangeRate,
+      foreignAmount: -foreignAmount,
+      signedAmount: -settlementBaseAmount,
+      memo: `${memo} - Cash Inflow (${foreignAmount} ${settlementCurrency} @ ${settlementExchangeRate})`,
+      tags
+    });
+
+    // Line 2: Clearing AR Leg (Receivable Cleared / Credit)
+    lines.push({
+      accountId: receivableOrPayableAccountId,
+      currency: settlementCurrency,
+      exchangeRate: originalExchangeRate,
+      foreignAmount: foreignAmount,
+      signedAmount: originalBaseAmount,
+      memo: `${memo} - Clearing Customer Invoice (${foreignAmount} ${settlementCurrency} @ ${originalExchangeRate})`,
+      tags
+    });
+
+    // Line 3: Realized FX Gain/Loss Balancing Leg
+    if (Math.abs(fxVariance) > 0.0001) {
+      lines.push({
+        accountId: fxGainLossAccountId,
+        currency: company.base_currency,
+        exchangeRate: 1.0,
+        foreignAmount: fxVariance,
+        signedAmount: fxVariance,
+        memo: `Automated Realized FX ${fxVariance >= 0 ? 'Gain' : 'Loss'} Balancing Leg`,
+        tags: [...tags, '#FX-GainLoss']
+      });
+    }
   }
 
   return lines;

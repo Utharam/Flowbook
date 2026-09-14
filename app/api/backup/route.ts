@@ -174,11 +174,22 @@ export async function POST(req: Request) {
       // Restore Accounts
       if (Array.isArray(payload.accounts)) {
         const stmt = db.prepare(`
-          INSERT OR REPLACE INTO accounts (id, company_id, code, name, type, parent_id, path, is_group, currency, description, is_active, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT OR REPLACE INTO accounts (
+            id, company_id, code, name, type, parent_id, path, is_group, currency,
+            description, tags, sop_steps, trigger_rules, last_reconciled_date,
+            last_reconciled_balance, is_active, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         for (const a of payload.accounts) {
-          stmt.run(a.id, a.company_id, a.code, a.name, a.type, a.parent_id || null, a.path, a.is_group ?? 0, a.currency || 'USD', a.description || null, a.is_active ?? 1, a.created_at || now);
+          const tagsStr = typeof a.tags === 'string' ? a.tags : JSON.stringify(a.tags || []);
+          const sopStr = typeof a.sop_steps === 'string' ? a.sop_steps : JSON.stringify(a.sop_steps || []);
+          const triggerStr = typeof a.trigger_rules === 'string' ? a.trigger_rules : JSON.stringify(a.trigger_rules || {});
+          stmt.run(
+            a.id, a.company_id, a.code, a.name, a.type, a.parent_id || null, a.path, a.is_group ?? 0,
+            a.currency || 'USD', a.description || null, tagsStr, sopStr, triggerStr,
+            a.last_reconciled_date || null, a.last_reconciled_balance ?? null,
+            a.is_active ?? 1, a.created_at || now
+          );
         }
       }
 
@@ -196,11 +207,19 @@ export async function POST(req: Request) {
       // Restore Journal Lines
       if (Array.isArray(payload.journal_lines)) {
         const stmt = db.prepare(`
-          INSERT OR REPLACE INTO journal_lines (id, entry_id, account_id, currency, exchange_rate, foreign_amount, amount, memo, tags, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT OR REPLACE INTO journal_lines (
+            id, entry_id, account_id, currency, exchange_rate, foreign_amount,
+            amount, memo, tags, bank_cleared_date, is_bank_cleared, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         for (const l of payload.journal_lines) {
-          stmt.run(l.id, l.entry_id, l.account_id, l.currency, l.exchange_rate || 1.0, l.foreign_amount, l.amount, l.memo || null, typeof l.tags === 'string' ? l.tags : JSON.stringify(l.tags || []), l.created_at || now);
+          stmt.run(
+            l.id, l.entry_id, l.account_id, l.currency, l.exchange_rate || 1.0,
+            l.foreign_amount, l.amount, l.memo || null,
+            typeof l.tags === 'string' ? l.tags : JSON.stringify(l.tags || []),
+            l.bank_cleared_date || null, l.is_bank_cleared ?? 0,
+            l.created_at || now
+          );
         }
       }
 
@@ -218,11 +237,21 @@ export async function POST(req: Request) {
       // Restore Assets
       if (Array.isArray(payload.assets)) {
         const stmt = db.prepare(`
-          INSERT OR REPLACE INTO assets (id, company_id, name, tag, cost_account_id, accumulated_dep_account_id, depreciation_expense_account_id, income_account_id, maintenance_account_id, acquisition_date, status, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT OR REPLACE INTO assets (
+            id, company_id, name, asset_code, category, tag, cost_account_id,
+            accumulated_dep_account_id, depreciation_expense_account_id, income_account_id,
+            maintenance_account_id, acquisition_date, purchase_cost, currency, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         for (const ast of payload.assets) {
-          stmt.run(ast.id, ast.company_id, ast.name, ast.tag, ast.cost_account_id, ast.accumulated_dep_account_id || null, ast.depreciation_expense_account_id || null, ast.income_account_id || null, ast.maintenance_account_id || null, ast.acquisition_date || null, ast.status || 'ACTIVE', ast.created_at || now);
+          stmt.run(
+            ast.id, ast.company_id, ast.name, ast.asset_code || null, ast.category || null,
+            ast.tag || null, ast.cost_account_id || null, ast.accumulated_dep_account_id || null,
+            ast.depreciation_expense_account_id || null, ast.income_account_id || null,
+            ast.maintenance_account_id || null, ast.acquisition_date || null,
+            ast.purchase_cost ?? 0, ast.currency || 'USD', ast.status || 'ACTIVE',
+            ast.created_at || now
+          );
         }
       }
 

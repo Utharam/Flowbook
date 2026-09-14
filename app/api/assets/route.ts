@@ -72,27 +72,31 @@ export async function POST(req: Request) {
     } = body;
 
     const id = `ast_${Date.now()}`;
+    const now = new Date().toISOString();
+    const cost = isNaN(Number(purchase_cost)) ? 0 : Number(purchase_cost);
+
     db.prepare(`
       INSERT INTO assets (
         id, company_id, name, asset_code, category, acquisition_date,
         purchase_cost, currency, tag, cost_account_id, accumulated_dep_account_id,
-        depreciation_expense_account_id, income_account_id, maintenance_account_id, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+        depreciation_expense_account_id, income_account_id, maintenance_account_id, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)
     `).run(
       id,
       company_id,
       name,
-      asset_code,
-      category,
-      acquisition_date,
-      Number(purchase_cost),
+      asset_code || null,
+      category || null,
+      acquisition_date || null,
+      cost,
       currency || 'USD',
       tag || null,
       cost_account_id || null,
       accumulated_dep_account_id || null,
       depreciation_expense_account_id || null,
       income_account_id || null,
-      maintenance_account_id || null
+      maintenance_account_id || null,
+      now
     );
 
     return NextResponse.json({ success: true, assetId: id });

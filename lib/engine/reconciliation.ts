@@ -232,12 +232,32 @@ export function finalizeBankReconciliation(
   accountId: string,
   asOfDate: string,
   statementBalance: number,
-  actor = 'Accountant'
-): { success: boolean; newReconciledDate: string; statementBalance: number } {
+  actor = 'Accountant',
+  allowDiscrepancyOverride = false
+): {
+  success: boolean;
+  newReconciledDate: string;
+  statementBalance: number;
+  variance?: number;
+  error?: string;
+} {
   const db = getDb();
 
   const account = (db.prepare('SELECT * FROM accounts WHERE id = ? AND company_id = ?').get(accountId, companyId) as unknown) as Account;
   if (!account) throw new Error('Account not found');
+
+  const brsData = getBankReconciliationData(companyId, accountId, asOfDate, statementBalance);
+  const variance = brsData.variance ?? 0;
+
+  if (variance > 0.005 && !allowDiscrepancyOverride) {
+    return {
+      success: false,
+      newReconciledDate: account.last_reconciled_date || '',
+      statementBalance,
+      variance,
+      error: `Cannot finalize BRS with unresolved variance of ${variance.toFixed(2)}. Reconciled bank balance is ${brsData.reconciledBankBalance.toFixed(2)}, statement balance is ${statementBalance.toFixed(2)}. Set allowDiscrepancyOverride to true to force finalize.`
+    };
+  }
 
   db.prepare(`
     UPDATE accounts SET 
@@ -250,13 +270,14 @@ export function finalizeBankReconciliation(
     companyId,
     'BANK_RECONCILIATION_FINALIZED',
     actor,
-    `Finalized bank reconciliation (BRS) for ${account.code} - ${account.name} as of ${asOfDate} with statement balance of ${statementBalance}.`,
-    { accountId, asOfDate, statementBalance }
+    `Finalized bank reconciliation (BRS) for ${account.code} - ${account.name} as of ${asOfDate} with statement balance of ${statementBalance}${variance > 0.005 ? ` (Override approved: variance ${variance.toFixed(2)})` : ''}.`,
+    { accountId, asOfDate, statementBalance, variance, allowDiscrepancyOverride }
   );
 
   return {
     success: true,
     newReconciledDate: asOfDate,
-    statementBalance
+    statementBalance,
+    variance
   };
 }
